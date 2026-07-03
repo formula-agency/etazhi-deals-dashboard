@@ -106,6 +106,41 @@
     #mortgage-lender-select {
       min-height: 160px;
     }
+    .checkbox-filter {
+      width: 100%;
+      max-height: 188px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px;
+    }
+    .checkbox-option {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      align-items: start;
+      gap: 8px;
+      padding: 6px;
+      border-radius: 6px;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      line-height: 1.25;
+    }
+    .checkbox-option:hover {
+      background: #f3f7f6;
+    }
+    #filters-zone .checkbox-option input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      padding: 0;
+      border-radius: 4px;
+    }
+    .checkbox-option-text {
+      overflow-wrap: anywhere;
+    }
     #mortgage-lender-filter-wrap[hidden] {
       display: none;
     }
@@ -837,12 +872,27 @@
           aria-pressed="false"
         >YTD</button>
       </div>
-      <label for="developer-select">Девелопер</label>
-      <select id="developer-select" multiple size="8"></select>
-      <label for="object-select">Объект</label>
-      <select id="object-select" multiple size="8"></select>
-      <label for="district-select">Район</label>
-      <select id="district-select" multiple size="6"></select>
+      <label id="developer-filter-label">Девелопер</label>
+      <div
+        id="developer-select"
+        class="checkbox-filter"
+        role="group"
+        aria-labelledby="developer-filter-label"
+      ></div>
+      <label id="object-filter-label">Объект</label>
+      <div
+        id="object-select"
+        class="checkbox-filter"
+        role="group"
+        aria-labelledby="object-filter-label"
+      ></div>
+      <label id="district-filter-label">Район</label>
+      <div
+        id="district-select"
+        class="checkbox-filter"
+        role="group"
+        aria-labelledby="district-filter-label"
+      ></div>
       <label for="purchase-mode-select">Способ покупки</label>
       <select id="purchase-mode-select">
         <option value="all" selected>Все</option>
@@ -1604,17 +1654,35 @@
     }
 
     function setSelectOptions(id, options) {
-      const select = document.getElementById(id);
-      if (!select) return;
-      const firstOption = select.querySelector('option[value=""]');
-      const placeholder = firstOption ? firstOption.cloneNode(true) : null;
-      select.textContent = "";
-      if (placeholder) select.appendChild(placeholder);
+      renderCheckboxOptions(id, options);
+    }
+
+    function createCheckboxOption(value, name, isAllOption = false) {
+      const label = document.createElement("label");
+      label.className = "checkbox-option";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = value;
+      input.dataset.filterValue = value;
+      if (isAllOption) {
+        input.dataset.filterAll = "true";
+        input.checked = true;
+      }
+      const text = document.createElement("span");
+      text.className = "checkbox-option-text";
+      text.textContent = name;
+      label.appendChild(input);
+      label.appendChild(text);
+      return label;
+    }
+
+    function renderCheckboxOptions(id, options) {
+      const container = document.getElementById(id);
+      if (!container) return;
+      container.textContent = "";
+      container.appendChild(createCheckboxOption("", "Все", true));
       (Array.isArray(options) ? options : []).forEach((item) => {
-        const opt = document.createElement("option");
-        opt.value = item.id;
-        opt.textContent = item.name;
-        select.appendChild(opt);
+        container.appendChild(createCheckboxOption(item.id, item.name));
       });
     }
 
@@ -2033,17 +2101,7 @@
     let resizeRafId = 0;
 
     function fillSelect(id, options) {
-      const select = document.getElementById(id);
-      const firstOption = select.querySelector('option[value=""]');
-      const placeholder = firstOption ? firstOption.cloneNode(true) : null;
-      select.textContent = "";
-      if (placeholder) select.appendChild(placeholder);
-      options.forEach((item) => {
-        const opt = document.createElement("option");
-        opt.value = item.id;
-        opt.textContent = item.name;
-        select.appendChild(opt);
-      });
+      renderCheckboxOptions(id, options);
     }
 
     function loadPlotly() {
@@ -2713,16 +2771,43 @@
 
     function readMultiSelectControl(id, availableIds) {
       const selectedValues = Array.from(
-        document.getElementById(id).selectedOptions
-      ).map((option) => String(option.value || "").trim()).filter(Boolean);
+        document.getElementById(id).querySelectorAll(
+          'input[type="checkbox"]:checked:not([data-filter-all="true"])'
+        )
+      ).map((input) => String(input.value || "").trim()).filter(Boolean);
       return normalizeAvailableValues(selectedValues, availableIds);
     }
 
     function setMultiSelectControl(id, values, availableIds) {
       const selectedValues = new Set(normalizeAvailableValues(values, availableIds));
-      Array.from(document.getElementById(id).options).forEach((option) => {
-        option.selected = selectedValues.has(option.value);
-      });
+      const container = document.getElementById(id);
+      const allInput = container.querySelector('input[data-filter-all="true"]');
+      container.querySelectorAll('input[type="checkbox"]:not([data-filter-all="true"])')
+        .forEach((input) => {
+          input.checked = selectedValues.has(input.value);
+        });
+      if (allInput) allInput.checked = selectedValues.size === 0;
+    }
+
+    function syncCheckboxFilterSelection(id, changedInput) {
+      const container = document.getElementById(id);
+      if (!container) return;
+      const allInput = container.querySelector('input[data-filter-all="true"]');
+      const optionInputs = Array.from(
+        container.querySelectorAll('input[type="checkbox"]:not([data-filter-all="true"])')
+      );
+      if (changedInput?.dataset.filterAll === "true" && changedInput.checked) {
+        optionInputs.forEach((input) => {
+          input.checked = false;
+        });
+        return;
+      }
+      if (changedInput?.dataset.filterAll !== "true" && changedInput.checked && allInput) {
+        allInput.checked = false;
+      }
+      if (allInput) {
+        allInput.checked = !optionInputs.some((input) => input.checked);
+      }
     }
 
     function readDeveloperControl() {
@@ -5323,6 +5408,13 @@
     }
     document.getElementById("date-from").addEventListener("change", onDateControlChange);
     document.getElementById("date-to").addEventListener("change", onDateControlChange);
+    ["developer-select", "object-select", "district-select"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.type !== "checkbox") return;
+        syncCheckboxFilterSelection(id, input);
+      });
+    });
     document.getElementById("purchase-mode-select").addEventListener("change", () => {
       state.purchaseMode = readPurchaseModeControl();
       if (state.purchaseMode !== "mortgage") {
