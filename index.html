@@ -1482,7 +1482,18 @@
     const DASHBOARD_DATA_VERSION = "20260703-dict-gzip";
     const DASHBOARD_DATA_URL = "dashboard-data.json?v=" + DASHBOARD_DATA_VERSION;
     const DASHBOARD_DATA_GZIP_URL = "dashboard-data.json.gz?v=" + DASHBOARD_DATA_VERSION;
+    const DASHBOARD_SUMMARY_URL = "dashboard-summary.json?v=" + DASHBOARD_DATA_VERSION;
     const PLOTLY_SCRIPT_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js";
+    const quickMoneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+    const quickAreaFmt = new Intl.NumberFormat("ru-RU", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
+    });
+    const quickRateFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+    const quickPercentFmt = new Intl.NumberFormat("ru-RU", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
+    });
     let plotlyLoadPromise = null;
 
     function inflateDashboardData(payload) {
@@ -1552,9 +1563,192 @@
       return inflateDashboardData(await fetchDashboardPayload(DASHBOARD_DATA_URL));
     }
 
+    async function loadDashboardSummary() {
+      return fetchDashboardPayload(DASHBOARD_SUMMARY_URL);
+    }
+
+    function nextFrame() {
+      return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+
+    function quickEscapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function quickSetText(id, value) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = value;
+    }
+
+    function quickSourceLabel(source) {
+      if (source === "contract") return "Договор";
+      if (source === "expo") return "Экспозиция";
+      if (source === "expo_donor") return "Экспозиция (донор)";
+      if (source === "donor") return "Донор";
+      return "Нет цены";
+    }
+
+    function quickAreaIssueLabel(reason) {
+      if (reason === "source_conflict") return "Конфликт источников";
+      if (reason === "missing_or_nonpositive") return "Нет валидной площади";
+      return "";
+    }
+
+    function quickSafeRate(totalAmount, totalArea) {
+      return totalArea ? totalAmount / totalArea : 0;
+    }
+
+    function setSelectOptions(id, options) {
+      const select = document.getElementById(id);
+      if (!select) return;
+      const firstOption = select.querySelector('option[value=""]');
+      const placeholder = firstOption ? firstOption.cloneNode(true) : null;
+      select.textContent = "";
+      if (placeholder) select.appendChild(placeholder);
+      (Array.isArray(options) ? options : []).forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item.id;
+        opt.textContent = item.name;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderInitialKpi(kpi) {
+      if (!kpi) return;
+      quickSetText("kpi-deals", quickMoneyFmt.format(Number(kpi.count) || 0));
+      quickSetText("kpi-sales", quickMoneyFmt.format(Number(kpi.sales) || 0));
+      quickSetText("kpi-avg", quickMoneyFmt.format(Number(kpi.avg) || 0));
+      quickSetText("kpi-area", quickAreaFmt.format(Number(kpi.area) || 0));
+      quickSetText("kpi-rate", quickRateFmt.format(Number(kpi.rate) || 0));
+      quickSetText("kpi-area-issues", quickMoneyFmt.format(Number(kpi.areaIssueCount) || 0));
+      quickSetText("kpi-rate-clean", quickRateFmt.format(Number(kpi.cleanRate) || 0));
+      const impact = Number(kpi.impactPercent) || 0;
+      quickSetText(
+        "kpi-rate-impact",
+        (impact > 0 ? "+" : "") + quickPercentFmt.format(impact) + "%"
+      );
+    }
+
+    function renderInitialCore(core, bodyId, summaryId) {
+      const body = document.getElementById(bodyId);
+      const summary = document.getElementById(summaryId);
+      if (!body || !summary || !core) return;
+      summary.textContent = (
+        quickMoneyFmt.format(Number(core.coreCount) || 0)
+        + " из "
+        + quickMoneyFmt.format(Number(core.totalCount) || 0)
+        + " ("
+        + quickPercentFmt.format(Number(core.coreSharePct) || 0)
+        + "% списка) -> "
+        + quickPercentFmt.format(Number(core.revenueSharePct) || 0)
+        + "% выручки"
+      );
+      body.innerHTML = (Array.isArray(core.rows) ? core.rows : []).map((item, index) => (
+        "<tr><td>"
+        + quickEscapeHtml(String(index + 1))
+        + "</td><td>"
+        + quickEscapeHtml(item.label || "")
+        + "</td><td class=\"numeric-cell\">"
+        + quickEscapeHtml(quickMoneyFmt.format(Number(item.amount) || 0))
+        + "</td><td class=\"numeric-cell\">"
+        + quickEscapeHtml(quickPercentFmt.format(Number(item.share) || 0) + "%")
+        + "</td><td class=\"numeric-cell\">"
+        + quickEscapeHtml(quickPercentFmt.format(Number(item.cumulative) || 0) + "%")
+        + "</td></tr>"
+      )).join("");
+    }
+
+    function renderInitialDetailPreview(detailPreview) {
+      const body = document.getElementById("detail-body");
+      if (!body || !detailPreview) return;
+      const rows = Array.isArray(detailPreview.rows) ? detailPreview.rows : [];
+      const totalRows = Number(detailPreview.totalRows) || rows.length;
+      const endIndex = Math.min(rows.length, 50);
+      quickSetText(
+        "detail-range",
+        totalRows ? "1-" + endIndex + " of " + quickMoneyFmt.format(totalRows) : "0-0 of 0"
+      );
+      body.innerHTML = rows.map((row) => {
+        const area = Math.max(0, Number(row.deal_area_sqm) || 0);
+        const amount = Number(row.deal_amount) || 0;
+        const contractAmount = Number(row.deal_amount_contract) || 0;
+        const rate = quickSafeRate(amount, area);
+        return "<tr><td>"
+          + quickEscapeHtml(row.deal_id || "")
+          + "</td><td>"
+          + quickEscapeHtml(row.developer_name || row.developer_group_name || "")
+          + "</td><td>"
+          + quickEscapeHtml(row.object_name || row.object_group_name || "")
+          + "</td><td>"
+          + quickEscapeHtml(row.contract_number || "")
+          + "</td><td>"
+          + quickEscapeHtml(row.contract_date || "")
+          + "</td><td class=\"numeric-cell\">"
+          + quickEscapeHtml(quickAreaFmt.format(area))
+          + "</td><td class=\"numeric-cell\">"
+          + quickEscapeHtml(quickMoneyFmt.format(amount))
+          + "</td><td class=\"numeric-cell\">"
+          + quickEscapeHtml(quickMoneyFmt.format(contractAmount))
+          + "</td><td class=\"numeric-cell\">"
+          + quickEscapeHtml(quickRateFmt.format(rate))
+          + "</td><td>"
+          + quickEscapeHtml(quickAreaIssueLabel(row.deal_area_issue_reason))
+          + "</td><td>"
+          + quickEscapeHtml(quickSourceLabel(row.deal_amount_source))
+          + "</td></tr>";
+      }).join("");
+    }
+
+    function renderInitialChartPlaceholders() {
+      [
+        "chart-by-developer",
+        "chart-by-object",
+        "chart-pareto-developer",
+        "chart-pareto-object",
+        "chart-rate-distribution",
+        "chart-rate-boxplot-developer",
+        "chart-rate-scatter",
+        "chart-by-date",
+        "chart-by-date-count",
+        "chart-by-date-rate",
+        "chart-quarter-yoy"
+      ].forEach((nodeId) => {
+        const node = document.getElementById(nodeId);
+        if (node) {
+          node.innerHTML = '<div class="chart-placeholder">Полные графики догружаются в фоне</div>';
+        }
+      });
+    }
+
+    function renderInitialSummary(summary) {
+      if (!summary) return;
+      renderInitialKpi(summary.kpi);
+      setSelectOptions("developer-select", summary.developers);
+      setSelectOptions("object-select", summary.objects);
+      setSelectOptions("district-select", summary.districts || []);
+      renderInitialCore(summary.coreDevelopers, "core80-dev-body", "core80-dev-summary");
+      renderInitialCore(summary.coreObjects, "core80-obj-body", "core80-obj-summary");
+      renderInitialDetailPreview(summary.detailPreview);
+      renderInitialChartPlaceholders();
+      quickSetText("drill-path", "Полные данные догружаются в фоне");
+    }
+
     bootstrapDashboard();
 
     async function bootstrapDashboard() {
+      const summary = await loadDashboardSummary().catch((error) => {
+        console.warn("Не удалось загрузить быстрый summary, жду полный набор данных.", error);
+        return null;
+      });
+      if (summary) {
+        renderInitialSummary(summary);
+        await nextFrame();
+      }
       const raw = await loadDashboardData().catch((error) => {
         console.error(error);
         const shell = document.getElementById("app-shell");
@@ -1840,6 +2034,10 @@
 
     function fillSelect(id, options) {
       const select = document.getElementById(id);
+      const firstOption = select.querySelector('option[value=""]');
+      const placeholder = firstOption ? firstOption.cloneNode(true) : null;
+      select.textContent = "";
+      if (placeholder) select.appendChild(placeholder);
       options.forEach((item) => {
         const opt = document.createElement("option");
         opt.value = item.id;

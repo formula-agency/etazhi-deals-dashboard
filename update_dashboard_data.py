@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 HTML_PATH = ROOT / "index.html"
 DATA_JSON_PATH = ROOT / "dashboard-data.json"
 DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
+SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
 DEAL_FIELDS = [
@@ -78,6 +79,20 @@ BOOLEAN_FIELDS = {
     "deal_amount_contract_rejected_high_ppsm",
     "deal_amount_contract_rejected_low_ppsm",
 }
+SUMMARY_DETAIL_FIELDS = [
+    "deal_id",
+    "developer_name",
+    "developer_group_name",
+    "object_name",
+    "object_group_name",
+    "contract_number",
+    "contract_date",
+    "deal_area_sqm",
+    "deal_amount",
+    "deal_amount_contract",
+    "deal_amount_source",
+    "deal_area_issue_reason",
+]
 
 AREA_BINS = [
     (0, 30, "(0,30]"),
@@ -463,10 +478,148 @@ def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def safe_rate(total_amount: float, total_area: float) -> float:
+    return total_amount / total_area if total_area else 0.0
+
+
+def kpi_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    sales_amount = 0.0
+    total_area = 0.0
+    clean_sales_amount = 0.0
+    clean_total_area = 0.0
+    area_issue_count = 0
+    area_conflict_count = 0
+
+    for row in rows:
+        amount = to_number(row.get("deal_amount"))
+        area = max(0.0, to_number(row.get("deal_area_sqm")))
+        has_conflict = clean_text(row.get("deal_area_issue_reason")) == "source_conflict"
+        sales_amount += amount
+        total_area += area
+        if row.get("deal_area_suspicious"):
+            area_issue_count += 1
+        if has_conflict:
+            area_conflict_count += 1
+        else:
+            clean_sales_amount += amount
+            clean_total_area += area
+
+    count = len(rows)
+    rate = safe_rate(sales_amount, total_area)
+    clean_rate = safe_rate(clean_sales_amount, clean_total_area)
+    impact_percent = ((clean_rate - rate) / rate) * 100 if rate else 0.0
+    return {
+        "count": count,
+        "sales": round(sales_amount),
+        "avg": round(sales_amount / count) if count else 0,
+        "area": round(total_area, 1),
+        "rate": round(rate),
+        "areaIssueCount": area_issue_count,
+        "areaConflictCount": area_conflict_count,
+        "cleanRate": round(clean_rate),
+        "impactPercent": round(impact_percent, 1),
+    }
+
+
+def aggregate_summary(
+    rows: list[dict[str, Any]], id_key: str, label_key: str, top_n: int = 10
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item_id = clean_text(row.get(id_key)) or "unknown"
+        item = grouped.setdefault(
+            item_id,
+            {"id": item_id, "label": clean_text(row.get(label_key)) or item_id, "amount": 0, "deals": 0, "area": 0.0},
+        )
+        item["amount"] += to_number(row.get("deal_amount"))
+        item["deals"] += 1
+        item["area"] += max(0.0, to_number(row.get("deal_area_sqm")))
+
+    ranked = sorted(grouped.values(), key=lambda item: (-item["amount"], key_text(item["label"])))
+    return [
+        {
+            **item,
+            "amount": round(item["amount"]),
+            "area": round(item["area"], 1),
+            "weighted_rate": round(safe_rate(item["amount"], item["area"])),
+        }
+        for item in ranked[:top_n]
+    ]
+
+
+def pareto_core_summary(
+    rows: list[dict[str, Any]], id_key: str, label_key: str, target_share: float = 80.0
+) -> dict[str, Any]:
+    ranked = aggregate_summary(rows, id_key, label_key, top_n=10_000)
+    grand_total = sum(to_number(item.get("amount")) for item in ranked)
+    cumulative = 0.0
+    core_rows = []
+    for item in ranked:
+        share = (to_number(item.get("amount")) / grand_total) * 100 if grand_total else 0.0
+        cumulative += share
+        core_rows.append(
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "amount": item["amount"],
+                "share": round(share, 1),
+                "cumulative": round(min(cumulative, 100.0), 1),
+            }
+        )
+        if cumulative >= target_share:
+            break
+
+    total_count = len(ranked)
+    core_count = len(core_rows)
+    return {
+        "rows": core_rows,
+        "totalCount": total_count,
+        "coreCount": core_count,
+        "coreSharePct": round((core_count / total_count) * 100, 1) if total_count else 0,
+        "revenueSharePct": core_rows[-1]["cumulative"] if core_rows else 0,
+    }
+
+
+def detail_preview_rows(rows: list[dict[str, Any]], limit: int = 50) -> list[dict[str, Any]]:
+    return [
+        {field: row.get(field) for field in SUMMARY_DETAIL_FIELDS}
+        for row in rows[:limit]
+    ]
+
+
+def summary_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
+    rows = data["deals"]
+    return {
+        "version": 1,
+        "kpi": kpi_summary(rows),
+        "developers": data["developers"],
+        "objects": data["objects"],
+        "districts": data["districts"],
+        "topDevelopers": aggregate_summary(
+            rows, "developer_group_id", "developer_group_name", top_n=10
+        ),
+        "topObjects": aggregate_summary(rows, "object_group_id", "object_group_name", top_n=10),
+        "coreDevelopers": pareto_core_summary(
+            rows, "developer_group_id", "developer_group_name"
+        ),
+        "coreObjects": pareto_core_summary(rows, "object_group_id", "object_group_name"),
+        "detailPreview": {
+            "totalRows": len(rows),
+            "rows": detail_preview_rows(rows, 50),
+        },
+    }
+
+
 def write_dashboard_data(data: dict[str, Any]) -> None:
     payload = json.dumps(compact_dashboard_data(data), ensure_ascii=False, separators=(",", ":"))
     DATA_JSON_PATH.write_text(payload, encoding="utf-8")
     DATA_JSON_GZIP_PATH.write_bytes(gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0))
+    summary_payload = json.dumps(
+        summary_dashboard_data(data),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    SUMMARY_JSON_PATH.write_text(summary_payload, encoding="utf-8")
 
 
 def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
@@ -489,6 +642,9 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
         "html_size_mb": round(HTML_PATH.stat().st_size / (1024 * 1024), 2),
         "data_json_size_mb": round(DATA_JSON_PATH.stat().st_size / (1024 * 1024), 2)
         if DATA_JSON_PATH.exists()
+        else None,
+        "summary_json_size_kb": round(SUMMARY_JSON_PATH.stat().st_size / 1024, 1)
+        if SUMMARY_JSON_PATH.exists()
         else None,
     }
 
