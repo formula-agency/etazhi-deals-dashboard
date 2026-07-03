@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tyumen Sales Dashboard</title>
-  <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {
       --bg: #f5f6f8;
@@ -1480,17 +1479,34 @@
   </div>
 
   <script type="module">
-    const DASHBOARD_DATA_URL = "dashboard-data.json?v=20260703-optimized";
+    const DASHBOARD_DATA_VERSION = "20260703-dict-gzip";
+    const DASHBOARD_DATA_URL = "dashboard-data.json?v=" + DASHBOARD_DATA_VERSION;
+    const DASHBOARD_DATA_GZIP_URL = "dashboard-data.json.gz?v=" + DASHBOARD_DATA_VERSION;
+    const PLOTLY_SCRIPT_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js";
+    let plotlyLoadPromise = null;
 
     function inflateDashboardData(payload) {
       if (Array.isArray(payload.deals)) return payload;
       const fields = Array.isArray(payload.dealFields) ? payload.dealFields : [];
       const rows = Array.isArray(payload.dealRows) ? payload.dealRows : [];
+      const stringTable = Array.isArray(payload.stringTable) ? payload.stringTable : [];
+      const stringFieldIndexes = new Set(
+        Array.isArray(payload.stringFieldIndexes) ? payload.stringFieldIndexes : []
+      );
+      const booleanFieldIndexes = new Set(
+        Array.isArray(payload.booleanFieldIndexes) ? payload.booleanFieldIndexes : []
+      );
       return {
         deals: rows.map((values) => {
           const row = {};
           for (let index = 0; index < fields.length; index += 1) {
-            row[fields[index]] = values[index];
+            let value = values[index];
+            if (stringFieldIndexes.has(index)) {
+              value = stringTable[value] ?? "";
+            } else if (booleanFieldIndexes.has(index)) {
+              value = Boolean(value);
+            }
+            row[fields[index]] = value;
           }
           return row;
         }),
@@ -1500,12 +1516,40 @@
       };
     }
 
-    async function loadDashboardData() {
-      const response = await fetch(DASHBOARD_DATA_URL);
+    function supportsCompressedDashboardData() {
+      return (
+        typeof DecompressionStream === "function"
+        && typeof ReadableStream === "function"
+        && typeof Response === "function"
+      );
+    }
+
+    async function readDashboardJson(response, compressed) {
+      if (!compressed) return response.json();
+      if (!response.body) throw new Error("Браузер не отдал поток для gzip-данных");
+      const decompressedStream = response.body.pipeThrough(new DecompressionStream("gzip"));
+      return new Response(decompressedStream).json();
+    }
+
+    async function fetchDashboardPayload(url, compressed = false) {
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error("Не удалось загрузить данные дашборда: HTTP " + response.status);
       }
-      return inflateDashboardData(await response.json());
+      return readDashboardJson(response, compressed);
+    }
+
+    async function loadDashboardData() {
+      if (supportsCompressedDashboardData()) {
+        try {
+          return inflateDashboardData(
+            await fetchDashboardPayload(DASHBOARD_DATA_GZIP_URL, true)
+          );
+        } catch (error) {
+          console.warn("Не удалось загрузить gzip-данные, пробую обычный JSON.", error);
+        }
+      }
+      return inflateDashboardData(await fetchDashboardPayload(DASHBOARD_DATA_URL));
     }
 
     bootstrapDashboard();
@@ -1804,25 +1848,46 @@
       });
     }
 
+    function loadPlotly() {
+      if (!window.Plotly) {
+        if (plotlyLoadPromise) return plotlyLoadPromise;
+        plotlyLoadPromise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = PLOTLY_SCRIPT_URL;
+          script.async = true;
+          script.onload = () => resolve(window.Plotly);
+          script.onerror = () => reject(new Error("Не удалось загрузить Plotly"));
+          document.head.appendChild(script);
+        });
+        return plotlyLoadPromise;
+      }
+      return Promise.resolve(window.Plotly);
+    }
+
+    function notifyPlotlyRendered(node) {
+      node.dispatchEvent(new CustomEvent("dashboard:plotly-rendered"));
+    }
+
     function plotlyRender(node, traces, layout) {
       if (!node) return;
       if (!window.Plotly) {
         node.innerHTML = '<div class="chart-placeholder">График загружается</div>';
-        const retryCount = Number(node.dataset.plotlyRetryCount || 0);
-        if (retryCount < 40) {
-          node.dataset.plotlyRetryCount = String(retryCount + 1);
-          window.setTimeout(() => plotlyRender(node, traces, layout), 250);
-        }
+        loadPlotly()
+          .then(() => plotlyRender(node, traces, layout))
+          .catch(() => {
+            node.innerHTML = '<div class="chart-placeholder">Не удалось загрузить график</div>';
+          });
         return;
       }
       node.innerHTML = "";
       node.dataset.plotlyRendered = "1";
-      delete node.dataset.plotlyRetryCount;
+      let renderResult = null;
       if (typeof window.Plotly.react === "function") {
-        window.Plotly.react(node, traces, layout, PLOTLY_CONFIG);
-        return;
+        renderResult = window.Plotly.react(node, traces, layout, PLOTLY_CONFIG);
+      } else {
+        renderResult = window.Plotly.newPlot(node, traces, layout, PLOTLY_CONFIG);
       }
-      window.Plotly.newPlot(node, traces, layout, PLOTLY_CONFIG);
+      Promise.resolve(renderResult).then(() => notifyPlotlyRendered(node));
     }
 
     function chartViewportTarget(nodeId) {
@@ -1906,11 +1971,19 @@
     }
 
     function bindPlotClick(node, handler) {
-      if (!node || typeof node.on !== "function") return;
-      if (typeof node.removeAllListeners === "function") {
-        node.removeAllListeners("plotly_click");
+      if (!node) return;
+      const attach = () => {
+        if (typeof node.on !== "function") return;
+        if (typeof node.removeAllListeners === "function") {
+          node.removeAllListeners("plotly_click");
+        }
+        node.on("plotly_click", handler);
+      };
+      if (typeof node.on !== "function") {
+        node.addEventListener("dashboard:plotly-rendered", attach, { once: true });
+        return;
       }
-      node.on("plotly_click", handler);
+      attach();
     }
 
     function monthKey(dateString) {

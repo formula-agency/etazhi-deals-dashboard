@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ import openpyxl
 ROOT = Path(__file__).resolve().parent
 HTML_PATH = ROOT / "index.html"
 DATA_JSON_PATH = ROOT / "dashboard-data.json"
+DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
 DEAL_FIELDS = [
@@ -51,6 +53,31 @@ DEAL_FIELDS = [
     "buyer_type_raw",
     "mortgage_lender_raw",
 ]
+STRING_DICTIONARY_FIELDS = {
+    "developer_id",
+    "developer_name",
+    "developer_group_id",
+    "developer_group_name",
+    "object_id",
+    "object_name",
+    "object_group_id",
+    "object_group_name",
+    "district_name",
+    "contract_number",
+    "contract_date",
+    "deal_area_source",
+    "deal_area_issue_reason",
+    "deal_area_bin",
+    "deal_amount_source",
+    "purchase_type_raw",
+    "buyer_type_raw",
+    "mortgage_lender_raw",
+}
+BOOLEAN_FIELDS = {
+    "deal_area_suspicious",
+    "deal_amount_contract_rejected_high_ppsm",
+    "deal_amount_contract_rejected_low_ppsm",
+}
 
 AREA_BINS = [
     (0, 30, "(0,30]"),
@@ -149,15 +176,39 @@ def parse_current_dashboard() -> dict[str, Any]:
     if DATA_JSON_PATH.exists():
         payload = json.loads(DATA_JSON_PATH.read_text(encoding="utf-8"))
         if "dealRows" in payload and "dealFields" in payload:
-            fields = payload["dealFields"]
-            return {
-                "deals": [dict(zip(fields, row)) for row in payload["dealRows"]],
-                "developers": payload.get("developers", []),
-                "objects": payload.get("objects", []),
-                "districts": payload.get("districts", []),
-            }
+            return inflate_compact_dashboard_data(payload)
         return payload
     return {"deals": [], "developers": [], "objects": [], "districts": []}
+
+
+def inflate_compact_dashboard_data(payload: dict[str, Any]) -> dict[str, Any]:
+    fields = list(payload.get("dealFields", []))
+    rows = payload.get("dealRows", [])
+    string_table = payload.get("stringTable", [])
+    string_field_indexes = set(payload.get("stringFieldIndexes", []))
+    boolean_field_indexes = set(payload.get("booleanFieldIndexes", []))
+
+    deals = []
+    for values in rows:
+        deal = {}
+        for index, field in enumerate(fields):
+            value = values[index] if index < len(values) else None
+            if index in string_field_indexes:
+                if isinstance(value, int) and 0 <= value < len(string_table):
+                    value = string_table[value]
+                elif value is None:
+                    value = ""
+            elif index in boolean_field_indexes:
+                value = bool(value)
+            deal[field] = value
+        deals.append(deal)
+
+    return {
+        "deals": deals,
+        "developers": payload.get("developers", []),
+        "objects": payload.get("objects", []),
+        "districts": payload.get("districts", []),
+    }
 
 
 def row_dict(headers: list[str], values: tuple[Any, ...]) -> dict[str, Any]:
@@ -318,8 +369,8 @@ def build_dashboard_data(current: dict[str, Any], selected_rows: list[dict[str, 
             "deal_area_egrn_sqm": number_value(area_egrn),
             "deal_area_linked_sqm": number_value(area_linked),
             "deal_area_source": area_source,
-            "deal_area_abs_diff_sqm": area_abs_diff,
-            "deal_area_rel_diff": area_rel_diff,
+            "deal_area_abs_diff_sqm": round(area_abs_diff, 4),
+            "deal_area_rel_diff": round(area_rel_diff, 6),
             "deal_area_suspicious": area_suspicious,
             "deal_area_issue_reason": area_issue_reason,
             "deal_area_bin": area_bin(deal_area),
@@ -361,9 +412,51 @@ def load_deal_rows() -> list[dict[str, Any]]:
 
 
 def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
+    string_table: list[str] = []
+    string_index: dict[str, int] = {}
+    string_field_indexes = [
+        index
+        for index, field in enumerate(DEAL_FIELDS)
+        if field in STRING_DICTIONARY_FIELDS
+    ]
+    boolean_field_indexes = [
+        index
+        for index, field in enumerate(DEAL_FIELDS)
+        if field in BOOLEAN_FIELDS
+    ]
+    string_field_index_set = set(string_field_indexes)
+    boolean_field_index_set = set(boolean_field_indexes)
+
+    def string_token(value: Any) -> int:
+        text = clean_text(value)
+        token = string_index.get(text)
+        if token is not None:
+            return token
+        token = len(string_table)
+        string_index[text] = token
+        string_table.append(text)
+        return token
+
+    deal_rows = []
+    for row in data["deals"]:
+        values = []
+        for index, field in enumerate(DEAL_FIELDS):
+            value = row.get(field)
+            if index in string_field_index_set:
+                values.append(string_token(value))
+            elif index in boolean_field_index_set:
+                values.append(1 if value else 0)
+            else:
+                values.append(value)
+        deal_rows.append(values)
+
     return {
+        "version": 2,
         "dealFields": DEAL_FIELDS,
-        "dealRows": [[row.get(field) for field in DEAL_FIELDS] for row in data["deals"]],
+        "dealRows": deal_rows,
+        "stringTable": string_table,
+        "stringFieldIndexes": string_field_indexes,
+        "booleanFieldIndexes": boolean_field_indexes,
         "developers": data["developers"],
         "objects": data["objects"],
         "districts": data["districts"],
@@ -373,6 +466,7 @@ def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
 def write_dashboard_data(data: dict[str, Any]) -> None:
     payload = json.dumps(compact_dashboard_data(data), ensure_ascii=False, separators=(",", ":"))
     DATA_JSON_PATH.write_text(payload, encoding="utf-8")
+    DATA_JSON_GZIP_PATH.write_bytes(gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0))
 
 
 def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
