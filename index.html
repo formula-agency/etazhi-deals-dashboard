@@ -1508,15 +1508,18 @@
       return inflateDashboardData(await response.json());
     }
 
-    const raw = await loadDashboardData().catch((error) => {
-      console.error(error);
-      const shell = document.getElementById("app-shell");
-      if (shell) {
-        shell.innerHTML = '<main class="panel" style="padding:16px">Не удалось загрузить данные дашборда. Откройте страницу через GitHub Pages или локальный web-сервер.</main>';
-      }
-      throw error;
-    });
-    const state = {
+    bootstrapDashboard();
+
+    async function bootstrapDashboard() {
+      const raw = await loadDashboardData().catch((error) => {
+        console.error(error);
+        const shell = document.getElementById("app-shell");
+        if (shell) {
+          shell.innerHTML = '<main class="panel" style="padding:16px">Не удалось загрузить данные дашборда. Откройте страницу через GitHub Pages или локальный web-сервер.</main>';
+        }
+        throw error;
+      });
+      const state = {
       dateFrom: "",
       dateTo: "",
       datePreset: "",
@@ -5155,6 +5158,7 @@
     });
 
     renderAll();
+    }
   </script>
 </body>
 </html>
