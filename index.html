@@ -838,11 +838,11 @@
         >YTD</button>
       </div>
       <label for="developer-select">Девелопер</label>
-      <select id="developer-select"><option value="">Все</option></select>
+      <select id="developer-select" multiple size="8"></select>
       <label for="object-select">Объект</label>
-      <select id="object-select"><option value="">Все</option></select>
+      <select id="object-select" multiple size="8"></select>
       <label for="district-select">Район</label>
-      <select id="district-select"><option value="">Все</option></select>
+      <select id="district-select" multiple size="6"></select>
       <label for="purchase-mode-select">Способ покупки</label>
       <select id="purchase-mode-select">
         <option value="all" selected>Все</option>
@@ -1761,9 +1761,9 @@
       dateFrom: "",
       dateTo: "",
       datePreset: "",
-      developerId: "",
-      objectId: "",
-      districtId: "",
+      developerIds: [],
+      objectIds: [],
+      districtIds: [],
       purchaseMode: "all",
       mortgageLenders: [],
       areaBins: [],
@@ -2702,6 +2702,41 @@
       return normalizePurchaseMode(document.getElementById("purchase-mode-select").value);
     }
 
+    function normalizeAvailableValues(values, availableIds) {
+      const selectedValues = new Set(
+        (Array.isArray(values) ? values : [])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      );
+      return Array.from(selectedValues).filter((value) => availableIds.has(value));
+    }
+
+    function readMultiSelectControl(id, availableIds) {
+      const selectedValues = Array.from(
+        document.getElementById(id).selectedOptions
+      ).map((option) => String(option.value || "").trim()).filter(Boolean);
+      return normalizeAvailableValues(selectedValues, availableIds);
+    }
+
+    function setMultiSelectControl(id, values, availableIds) {
+      const selectedValues = new Set(normalizeAvailableValues(values, availableIds));
+      Array.from(document.getElementById(id).options).forEach((option) => {
+        option.selected = selectedValues.has(option.value);
+      });
+    }
+
+    function readDeveloperControl() {
+      return readMultiSelectControl("developer-select", AVAILABLE_DEVELOPER_IDS);
+    }
+
+    function readObjectControl() {
+      return readMultiSelectControl("object-select", AVAILABLE_OBJECT_IDS);
+    }
+
+    function readDistrictControl() {
+      return readMultiSelectControl("district-select", AVAILABLE_DISTRICT_IDS);
+    }
+
     function readMortgageLenderControl() {
       const selectedValues = Array.from(
         document.getElementById("mortgage-lender-select").selectedOptions
@@ -2858,16 +2893,19 @@
         params.set("dateTo", state.dateTo);
         hasPayload = true;
       }
-      if (state.developerId) {
-        params.set("developerId", state.developerId);
+      const developerIds = normalizeAvailableValues(state.developerIds, AVAILABLE_DEVELOPER_IDS);
+      if (developerIds.length) {
+        params.set("developerIds", developerIds.join(","));
         hasPayload = true;
       }
-      if (state.objectId) {
-        params.set("objectId", state.objectId);
+      const objectIds = normalizeAvailableValues(state.objectIds, AVAILABLE_OBJECT_IDS);
+      if (objectIds.length) {
+        params.set("objectIds", objectIds.join(","));
         hasPayload = true;
       }
-      if (state.districtId) {
-        params.set("districtId", state.districtId);
+      const districtIds = normalizeAvailableValues(state.districtIds, AVAILABLE_DISTRICT_IDS);
+      if (districtIds.length) {
+        params.set("districtIds", districtIds.join(","));
         hasPayload = true;
       }
       const purchaseMode = normalizePurchaseMode(state.purchaseMode);
@@ -2931,9 +2969,9 @@
       state.dateFrom = "";
       state.dateTo = "";
       state.datePreset = "";
-      state.developerId = "";
-      state.objectId = "";
-      state.districtId = "";
+      state.developerIds = [];
+      state.objectIds = [];
+      state.districtIds = [];
       state.purchaseMode = "all";
       state.mortgageLenders = [];
       state.areaBins = [];
@@ -2955,19 +2993,29 @@
       state.dateTo = normalizeDateInput(params.get("dateTo") || "");
       state.datePreset = matchingDatePreset(state.dateFrom, state.dateTo);
 
-      const developerId = String(params.get("developerId") || "");
-      if (AVAILABLE_DEVELOPER_IDS.has(developerId)) {
-        state.developerId = developerId;
-      }
+      state.developerIds = normalizeAvailableValues(
+        String(params.get("developerIds") || params.get("developerId") || "")
+          .split(",")
+          .map((value) => String(value || "").trim())
+          .filter(Boolean),
+        AVAILABLE_DEVELOPER_IDS
+      );
 
-      const objectId = String(params.get("objectId") || "");
-      if (AVAILABLE_OBJECT_IDS.has(objectId)) {
-        state.objectId = objectId;
-      }
-      const districtId = String(params.get("districtId") || "");
-      if (AVAILABLE_DISTRICT_IDS.has(districtId)) {
-        state.districtId = districtId;
-      }
+      state.objectIds = normalizeAvailableValues(
+        String(params.get("objectIds") || params.get("objectId") || "")
+          .split(",")
+          .map((value) => String(value || "").trim())
+          .filter(Boolean),
+        AVAILABLE_OBJECT_IDS
+      );
+
+      state.districtIds = normalizeAvailableValues(
+        String(params.get("districtIds") || params.get("districtId") || "")
+          .split(",")
+          .map((value) => String(value || "").trim())
+          .filter(Boolean),
+        AVAILABLE_DISTRICT_IDS
+      );
 
       state.purchaseMode = normalizePurchaseMode(params.get("purchaseMode") || "all");
       if (state.purchaseMode === "mortgage") {
@@ -3009,9 +3057,9 @@
 
     function syncFilterControlsFromState() {
       setDateControls(state.dateFrom, state.dateTo);
-      document.getElementById("developer-select").value = state.developerId;
-      document.getElementById("object-select").value = state.objectId;
-      document.getElementById("district-select").value = state.districtId;
+      setMultiSelectControl("developer-select", state.developerIds, AVAILABLE_DEVELOPER_IDS);
+      setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
+      setMultiSelectControl("district-select", state.districtIds, AVAILABLE_DISTRICT_IDS);
       document.getElementById("purchase-mode-select").value = normalizePurchaseMode(
         state.purchaseMode
       );
@@ -3022,8 +3070,12 @@
 
     function rebuildDrillPath() {
       state.drillPath = [];
-      if (state.developerId) state.drillPath.push("developer");
-      if (state.objectId) state.drillPath.push("object");
+      if (normalizeAvailableValues(state.developerIds, AVAILABLE_DEVELOPER_IDS).length) {
+        state.drillPath.push("developer");
+      }
+      if (normalizeAvailableValues(state.objectIds, AVAILABLE_OBJECT_IDS).length) {
+        state.drillPath.push("object");
+      }
       if (state.month) state.drillPath.push("deals");
     }
 
@@ -3072,9 +3124,9 @@
       return [
         state.dateFrom || "",
         state.dateTo || "",
-        state.developerId || "",
-        state.objectId || "",
-        state.districtId || "",
+        normalizeAvailableValues(state.developerIds, AVAILABLE_DEVELOPER_IDS).join(","),
+        normalizeAvailableValues(state.objectIds, AVAILABLE_OBJECT_IDS).join(","),
+        normalizeAvailableValues(state.districtIds, AVAILABLE_DISTRICT_IDS).join(","),
         purchaseMode,
         lenderKey,
         normalizeAreaBinValues(state.areaBins).join(","),
@@ -3139,15 +3191,33 @@
       const activeAreaBins = normalizeAreaBinValues(state.areaBins);
       const activeSources = normalizeSourceValues(state.priceSources);
       const activeMonth = normalizeMonthValue(state.month);
+      const activeDeveloperIds = normalizeAvailableValues(
+        state.developerIds,
+        AVAILABLE_DEVELOPER_IDS
+      );
+      const activeObjectIds = normalizeAvailableValues(state.objectIds, AVAILABLE_OBJECT_IDS);
+      const activeDistrictIds = normalizeAvailableValues(
+        state.districtIds,
+        AVAILABLE_DISTRICT_IDS
+      );
       const purchaseMode = normalizePurchaseMode(
         purchaseModeOverride == null ? state.purchaseMode : purchaseModeOverride
       );
       return deals.filter((row) => {
         if (state.dateFrom && row.contract_date < state.dateFrom) return false;
         if (state.dateTo && row.contract_date > state.dateTo) return false;
-        if (state.developerId && row.developer_group_id !== state.developerId) return false;
-        if (state.objectId && row.object_group_id !== state.objectId) return false;
-        if (state.districtId && row.district_name !== state.districtId) return false;
+        if (
+          activeDeveloperIds.length
+          && !activeDeveloperIds.includes(String(row.developer_group_id || ""))
+        ) return false;
+        if (
+          activeObjectIds.length
+          && !activeObjectIds.includes(String(row.object_group_id || ""))
+        ) return false;
+        if (
+          activeDistrictIds.length
+          && !activeDistrictIds.includes(String(row.district_name || ""))
+        ) return false;
         if (purchaseMode === "mortgage" && !row.is_mortgage_purchase) return false;
         if (purchaseMode === "non_mortgage" && row.is_mortgage_purchase) return false;
         if (activeAreaBins.length && !activeAreaBins.includes(row.deal_area_bin)) return false;
@@ -3729,12 +3799,12 @@
         summaryId: "core80-dev-summary",
         onSelect: (selectedId) => {
           if (!selectedId || selectedId === CHART_OTHER_ID) return;
-          state.developerId = selectedId;
-          state.objectId = "";
+          state.developerIds = [selectedId];
+          state.objectIds = [];
           state.month = "";
           state.focusedDealRowIndex = -1;
-          document.getElementById("developer-select").value = selectedId;
-          document.getElementById("object-select").value = "";
+          setMultiSelectControl("developer-select", state.developerIds, AVAILABLE_DEVELOPER_IDS);
+          setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
           rebuildDrillPath();
           resetTablePage();
           renderAll();
@@ -3748,10 +3818,10 @@
         summaryId: "core80-obj-summary",
         onSelect: (selectedId) => {
           if (!selectedId || selectedId === CHART_OTHER_ID) return;
-          state.objectId = selectedId;
+          state.objectIds = [selectedId];
           state.month = "";
           state.focusedDealRowIndex = -1;
-          document.getElementById("object-select").value = selectedId;
+          setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
           rebuildDrillPath();
           resetTablePage();
           renderAll();
@@ -3911,11 +3981,11 @@
         xTitle: "Девелопер",
         color: "#0f766e",
         onSelect: (selectedId) => {
-        state.developerId = selectedId;
-        state.objectId = "";
+        state.developerIds = [selectedId];
+        state.objectIds = [];
         state.focusedDealRowIndex = -1;
-        document.getElementById("developer-select").value = selectedId;
-        document.getElementById("object-select").value = "";
+        setMultiSelectControl("developer-select", state.developerIds, AVAILABLE_DEVELOPER_IDS);
+        setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
         rebuildDrillPath();
         resetTablePage();
         renderAll();
@@ -3944,9 +4014,9 @@
         xTitle: "Объект",
         color: "#1d4ed8",
         onSelect: (selectedId) => {
-        state.objectId = selectedId;
+        state.objectIds = [selectedId];
         state.focusedDealRowIndex = -1;
-        document.getElementById("object-select").value = selectedId;
+        setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
         rebuildDrillPath();
         resetTablePage();
         renderAll();
@@ -5359,9 +5429,9 @@
       state.dateFrom = dateRange.dateFrom;
       state.dateTo = dateRange.dateTo;
       state.datePreset = matchingDatePreset(state.dateFrom, state.dateTo);
-      state.developerId = document.getElementById("developer-select").value;
-      state.objectId = document.getElementById("object-select").value;
-      state.districtId = document.getElementById("district-select").value;
+      state.developerIds = readDeveloperControl();
+      state.objectIds = readObjectControl();
+      state.districtIds = readDistrictControl();
       state.purchaseMode = readPurchaseModeControl();
       state.mortgageLenders = state.purchaseMode === "mortgage"
         ? readMortgageLenderControl()
@@ -5379,9 +5449,9 @@
       state.dateFrom = "";
       state.dateTo = "";
       state.datePreset = "";
-      state.developerId = "";
-      state.objectId = "";
-      state.districtId = "";
+      state.developerIds = [];
+      state.objectIds = [];
+      state.districtIds = [];
       state.purchaseMode = "all";
       state.mortgageLenders = [];
       state.areaBins = [];
@@ -5407,9 +5477,9 @@
       state.overpricingSortDirection = "";
       state.focusedDealRowIndex = -1;
       setDateControls("", "");
-      document.getElementById("developer-select").value = "";
-      document.getElementById("object-select").value = "";
-      document.getElementById("district-select").value = "";
+      setMultiSelectControl("developer-select", state.developerIds, AVAILABLE_DEVELOPER_IDS);
+      setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
+      setMultiSelectControl("district-select", state.districtIds, AVAILABLE_DISTRICT_IDS);
       document.getElementById("purchase-mode-select").value = "all";
       setAreaBinControl(state.areaBins);
       setSourceControl(state.priceSources);
