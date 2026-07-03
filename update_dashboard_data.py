@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import base64
 import gzip
 import hashlib
 import json
@@ -20,6 +21,7 @@ DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
+DATA_GZIP_MARKER = '<script id="dashboard-data-gzip" type="text/plain">'
 SUMMARY_MARKER = '<script id="dashboard-summary-data" type="application/json">'
 MODULE_SCRIPT_MARKER = '  <script type="module">'
 DEAL_FIELDS = [
@@ -190,6 +192,14 @@ def parse_current_dashboard() -> dict[str, Any]:
         start = html.index(DATA_MARKER) + len(DATA_MARKER)
         end = html.index("</script>", start)
         payload = json.loads(html[start:end])
+        if "dealRows" in payload and "dealFields" in payload:
+            return inflate_compact_dashboard_data(payload)
+        return payload
+    if DATA_GZIP_MARKER in html:
+        start = html.index(DATA_GZIP_MARKER) + len(DATA_GZIP_MARKER)
+        end = html.index("</script>", start)
+        compressed = base64.b64decode(html[start:end].strip())
+        payload = json.loads(gzip.decompress(compressed).decode("utf-8"))
         if "dealRows" in payload and "dealFields" in payload:
             return inflate_compact_dashboard_data(payload)
         return payload
@@ -618,14 +628,16 @@ def summary_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
 def write_dashboard_data(data: dict[str, Any]) -> None:
     payload = json.dumps(compact_dashboard_data(data), ensure_ascii=False, separators=(",", ":"))
     DATA_JSON_PATH.write_text(payload, encoding="utf-8")
-    DATA_JSON_GZIP_PATH.write_bytes(gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0))
+    compressed_payload = gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0)
+    DATA_JSON_GZIP_PATH.write_bytes(compressed_payload)
     summary_payload = json.dumps(
         summary_dashboard_data(data),
         ensure_ascii=False,
         separators=(",", ":"),
     )
     SUMMARY_JSON_PATH.write_text(summary_payload, encoding="utf-8")
-    write_inline_dashboard_data(payload, summary_payload)
+    inline_gzip_payload = base64.b64encode(compressed_payload).decode("ascii")
+    write_inline_dashboard_data(inline_gzip_payload, summary_payload)
 
 
 def safe_json_for_script(payload: str) -> str:
@@ -650,10 +662,21 @@ def replace_or_insert_json_script(html: str, marker: str, payload: str) -> str:
     return html.replace(MODULE_SCRIPT_MARKER, f"  {script}\n{MODULE_SCRIPT_MARKER}", 1)
 
 
-def write_inline_dashboard_data(payload: str, summary_payload: str) -> None:
+def remove_json_script(html: str, marker: str) -> str:
+    if marker not in html:
+        return html
+    start = html.index(marker)
+    line_start = html.rfind("\n", 0, start) + 1
+    end = html.index("</script>", start) + len("</script>")
+    line_end = end + 1 if end < len(html) and html[end:end + 1] == "\n" else end
+    return html[:line_start] + html[line_end:]
+
+
+def write_inline_dashboard_data(inline_gzip_payload: str, summary_payload: str) -> None:
     html = HTML_PATH.read_text(encoding="utf-8")
+    html = remove_json_script(html, DATA_MARKER)
     html = replace_or_insert_json_script(html, SUMMARY_MARKER, summary_payload)
-    html = replace_or_insert_json_script(html, DATA_MARKER, payload)
+    html = replace_or_insert_json_script(html, DATA_GZIP_MARKER, inline_gzip_payload)
     HTML_PATH.write_text(html, encoding="utf-8")
 
 
