@@ -20,6 +20,8 @@ DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
+SUMMARY_MARKER = '<script id="dashboard-summary-data" type="application/json">'
+MODULE_SCRIPT_MARKER = '  <script type="module">'
 DEAL_FIELDS = [
     "deal_id",
     "developer_id",
@@ -187,7 +189,10 @@ def parse_current_dashboard() -> dict[str, Any]:
     if DATA_MARKER in html:
         start = html.index(DATA_MARKER) + len(DATA_MARKER)
         end = html.index("</script>", start)
-        return json.loads(html[start:end])
+        payload = json.loads(html[start:end])
+        if "dealRows" in payload and "dealFields" in payload:
+            return inflate_compact_dashboard_data(payload)
+        return payload
     if DATA_JSON_PATH.exists():
         payload = json.loads(DATA_JSON_PATH.read_text(encoding="utf-8"))
         if "dealRows" in payload and "dealFields" in payload:
@@ -620,6 +625,36 @@ def write_dashboard_data(data: dict[str, Any]) -> None:
         separators=(",", ":"),
     )
     SUMMARY_JSON_PATH.write_text(summary_payload, encoding="utf-8")
+    write_inline_dashboard_data(payload, summary_payload)
+
+
+def safe_json_for_script(payload: str) -> str:
+    return (
+        payload
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def replace_or_insert_json_script(html: str, marker: str, payload: str) -> str:
+    script = f"{marker}{safe_json_for_script(payload)}</script>"
+    if marker in html:
+        start = html.index(marker)
+        end = html.index("</script>", start) + len("</script>")
+        return html[:start] + script + html[end:]
+    if MODULE_SCRIPT_MARKER not in html:
+        raise RuntimeError("Не найдено место для вставки inline-данных в index.html")
+    return html.replace(MODULE_SCRIPT_MARKER, f"  {script}\n{MODULE_SCRIPT_MARKER}", 1)
+
+
+def write_inline_dashboard_data(payload: str, summary_payload: str) -> None:
+    html = HTML_PATH.read_text(encoding="utf-8")
+    html = replace_or_insert_json_script(html, SUMMARY_MARKER, summary_payload)
+    html = replace_or_insert_json_script(html, DATA_MARKER, payload)
+    HTML_PATH.write_text(html, encoding="utf-8")
 
 
 def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
