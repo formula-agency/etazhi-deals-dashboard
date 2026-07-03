@@ -14,8 +14,43 @@ import openpyxl
 
 ROOT = Path(__file__).resolve().parent
 HTML_PATH = ROOT / "index.html"
+DATA_JSON_PATH = ROOT / "dashboard-data.json"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
+DEAL_FIELDS = [
+    "deal_id",
+    "developer_id",
+    "developer_name",
+    "developer_group_id",
+    "developer_group_name",
+    "object_id",
+    "object_name",
+    "object_group_id",
+    "object_group_name",
+    "district_name",
+    "contract_number",
+    "contract_date",
+    "deal_area_sqm",
+    "deal_area_egrn_sqm",
+    "deal_area_linked_sqm",
+    "deal_area_source",
+    "deal_area_abs_diff_sqm",
+    "deal_area_rel_diff",
+    "deal_area_suspicious",
+    "deal_area_issue_reason",
+    "deal_area_bin",
+    "deal_amount",
+    "deal_amount_effective",
+    "deal_amount_contract",
+    "deal_amount_expo",
+    "deal_amount_donor",
+    "deal_amount_source",
+    "deal_amount_contract_rejected_high_ppsm",
+    "deal_amount_contract_rejected_low_ppsm",
+    "purchase_type_raw",
+    "buyer_type_raw",
+    "mortgage_lender_raw",
+]
 
 AREA_BINS = [
     (0, 30, "(0,30]"),
@@ -107,9 +142,22 @@ def area_bin(area: float) -> str:
 
 def parse_current_dashboard() -> dict[str, Any]:
     html = HTML_PATH.read_text(encoding="utf-8")
-    start = html.index(DATA_MARKER) + len(DATA_MARKER)
-    end = html.index("</script>", start)
-    return json.loads(html[start:end])
+    if DATA_MARKER in html:
+        start = html.index(DATA_MARKER) + len(DATA_MARKER)
+        end = html.index("</script>", start)
+        return json.loads(html[start:end])
+    if DATA_JSON_PATH.exists():
+        payload = json.loads(DATA_JSON_PATH.read_text(encoding="utf-8"))
+        if "dealRows" in payload and "dealFields" in payload:
+            fields = payload["dealFields"]
+            return {
+                "deals": [dict(zip(fields, row)) for row in payload["dealRows"]],
+                "developers": payload.get("developers", []),
+                "objects": payload.get("objects", []),
+                "districts": payload.get("districts", []),
+            }
+        return payload
+    return {"deals": [], "developers": [], "objects": [], "districts": []}
 
 
 def row_dict(headers: list[str], values: tuple[Any, ...]) -> dict[str, Any]:
@@ -312,12 +360,19 @@ def load_deal_rows() -> list[dict[str, Any]]:
     return [row_dict(headers, row) for row in iterator]
 
 
-def replace_dashboard_data(data: dict[str, Any]) -> None:
-    html = HTML_PATH.read_text(encoding="utf-8")
-    start = html.index(DATA_MARKER) + len(DATA_MARKER)
-    end = html.index("</script>", start)
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    HTML_PATH.write_text(html[:start] + payload + html[end:], encoding="utf-8")
+def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dealFields": DEAL_FIELDS,
+        "dealRows": [[row.get(field) for field in DEAL_FIELDS] for row in data["deals"]],
+        "developers": data["developers"],
+        "objects": data["objects"],
+        "districts": data["districts"],
+    }
+
+
+def write_dashboard_data(data: dict[str, Any]) -> None:
+    payload = json.dumps(compact_dashboard_data(data), ensure_ascii=False, separators=(",", ":"))
+    DATA_JSON_PATH.write_text(payload, encoding="utf-8")
 
 
 def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
@@ -338,6 +393,9 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
         "price_sources": dict(sorted(sources.items())),
         "area_issues": dict(sorted(area_issues.items())),
         "html_size_mb": round(HTML_PATH.stat().st_size / (1024 * 1024), 2),
+        "data_json_size_mb": round(DATA_JSON_PATH.stat().st_size / (1024 * 1024), 2)
+        if DATA_JSON_PATH.exists()
+        else None,
     }
 
 
@@ -346,7 +404,7 @@ def main() -> None:
     source_rows = load_deal_rows()
     selected_rows = choose_rows(source_rows)
     data = build_dashboard_data(current, selected_rows)
-    replace_dashboard_data(data)
+    write_dashboard_data(data)
     print(json.dumps(summarize(data, len(source_rows)), ensure_ascii=False, indent=2))
 
 
