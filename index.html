@@ -225,25 +225,11 @@
       min-height: inherit;
       display: grid;
       place-items: center;
-      gap: 8px;
       color: var(--muted);
       font-size: 12px;
       border: 1px dashed var(--line);
       border-radius: 8px;
       background: #f9fafb;
-    }
-    .chart-placeholder button {
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: #fff;
-      border-radius: 8px;
-      padding: 8px 12px;
-      font: inherit;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .chart-placeholder button:hover {
-      background: #12433d;
     }
     .wide-card {
       grid-column: 1 / -1;
@@ -2154,8 +2140,11 @@
     };
     const chartRenderers = new Map();
     const visibleChartNodeIds = new Set();
+    const pendingAutoChartNodeIds = new Set();
     let chartObserver = null;
     let resizeRafId = 0;
+    let autoChartRenderTimerId = 0;
+    let autoChartRenderInProgress = false;
 
     function fillSelect(id, options) {
       renderCheckboxOptions(id, options);
@@ -2182,15 +2171,14 @@
     }
 
     function plotlyRender(node, traces, layout) {
-      if (!node) return;
+      if (!node) return Promise.resolve();
       if (!window.Plotly) {
         node.innerHTML = '<div class="chart-placeholder">График загружается</div>';
-        loadPlotly()
+        return loadPlotly()
           .then(() => plotlyRender(node, traces, layout))
           .catch(() => {
             node.innerHTML = '<div class="chart-placeholder">Не удалось загрузить график</div>';
           });
-        return;
       }
       node.innerHTML = "";
       node.dataset.plotlyRendered = "1";
@@ -2200,7 +2188,7 @@
       } else {
         renderResult = window.Plotly.newPlot(node, traces, layout, PLOTLY_CONFIG);
       }
-      Promise.resolve(renderResult).then(() => notifyPlotlyRendered(node));
+      return Promise.resolve(renderResult).then(() => notifyPlotlyRendered(node));
     }
 
     function chartViewportTarget(nodeId) {
@@ -2209,24 +2197,13 @@
       return node.closest(".chart-card") || node;
     }
 
-    function showChartPlaceholder(nodeId, text = "График не построен") {
+    function showChartPlaceholder(nodeId, text = "График строится автоматически") {
       const node = document.getElementById(nodeId);
       if (!node || node.dataset.plotlyRendered === "1") return;
-      node.innerHTML = "";
       const placeholder = document.createElement("div");
       placeholder.className = "chart-placeholder";
-      const label = document.createElement("div");
-      label.textContent = text;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = "Построить график";
-      button.addEventListener("click", () => {
-        visibleChartNodeIds.add(nodeId);
-        renderScheduledChart(nodeId);
-      });
-      placeholder.appendChild(label);
-      placeholder.appendChild(button);
-      node.appendChild(placeholder);
+      placeholder.textContent = text;
+      node.replaceChildren(placeholder);
     }
 
     function isNearViewport(target) {
@@ -2235,11 +2212,66 @@
       return rect.top <= viewportHeight + 320 && rect.bottom >= -320;
     }
 
+    function requestIdleWork(callback, timeout = 1500) {
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(callback, { timeout });
+        return;
+      }
+      window.setTimeout(callback, 0);
+    }
+
     function renderScheduledChart(nodeId) {
       const renderChart = chartRenderers.get(nodeId);
-      if (!renderChart) return;
+      if (!renderChart) return Promise.resolve();
+      pendingAutoChartNodeIds.delete(nodeId);
       visibleChartNodeIds.add(nodeId);
-      renderChart();
+      const node = document.getElementById(nodeId);
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        if (node) node.addEventListener("dashboard:plotly-rendered", finish, { once: true });
+        Promise.resolve(renderChart()).then(() => {
+          if (!node || node.dataset.plotlyRendered === "1") finish();
+        });
+        window.setTimeout(finish, 2500);
+      });
+    }
+
+    function pickNextAutoChartId() {
+      const pendingIds = Array.from(pendingAutoChartNodeIds);
+      return pendingIds.find((nodeId) => {
+        const target = chartViewportTarget(nodeId);
+        return target && isNearViewport(target);
+      }) || pendingIds[0] || "";
+    }
+
+    function scheduleAutoChartDrain(delayMs = 250) {
+      if (autoChartRenderTimerId || autoChartRenderInProgress) return;
+      autoChartRenderTimerId = window.setTimeout(() => {
+        autoChartRenderTimerId = 0;
+        requestIdleWork(drainAutoChartQueue);
+      }, delayMs);
+    }
+
+    async function drainAutoChartQueue() {
+      if (autoChartRenderInProgress) return;
+      const nodeId = pickNextAutoChartId();
+      if (!nodeId) return;
+      pendingAutoChartNodeIds.delete(nodeId);
+      autoChartRenderInProgress = true;
+      await renderScheduledChart(nodeId);
+      autoChartRenderInProgress = false;
+      if (pendingAutoChartNodeIds.size) scheduleAutoChartDrain(150);
+    }
+
+    function scheduleAutoChartRender(nodeId) {
+      if (!nodeId || visibleChartNodeIds.has(nodeId)) return;
+      pendingAutoChartNodeIds.add(nodeId);
+      scheduleAutoChartDrain();
     }
 
     function ensureChartObserver() {
@@ -2266,15 +2298,12 @@
         window.requestAnimationFrame(() => renderScheduledChart(nodeId));
         return;
       }
-      showChartPlaceholder(nodeId, "График строится по запросу");
-      if (!options.auto) return;
-      if (isNearViewport(target)) {
-        window.requestAnimationFrame(() => renderScheduledChart(nodeId));
-        return;
-      }
+      showChartPlaceholder(nodeId);
+      if (options.auto === false) return;
+      scheduleAutoChartRender(nodeId);
       const observer = ensureChartObserver();
       if (!observer) {
-        renderScheduledChart(nodeId);
+        scheduleAutoChartRender(nodeId);
         return;
       }
       observer.observe(target);
