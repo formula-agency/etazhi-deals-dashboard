@@ -225,11 +225,25 @@
       min-height: inherit;
       display: grid;
       place-items: center;
+      gap: 8px;
       color: var(--muted);
       font-size: 12px;
       border: 1px dashed var(--line);
       border-radius: 8px;
       background: #f9fafb;
+    }
+    .chart-placeholder button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .chart-placeholder button:hover {
+      background: #12433d;
     }
     .wide-card {
       grid-column: 1 / -1;
@@ -1831,7 +1845,7 @@
       ].forEach((nodeId) => {
         const node = document.getElementById(nodeId);
         if (node) {
-          node.innerHTML = '<div class="chart-placeholder">Полные графики догружаются в фоне</div>';
+          node.innerHTML = '<div class="chart-placeholder">График доступен после загрузки данных</div>';
         }
       });
     }
@@ -2195,10 +2209,24 @@
       return node.closest(".chart-card") || node;
     }
 
-    function showChartPlaceholder(nodeId) {
+    function showChartPlaceholder(nodeId, text = "График не построен") {
       const node = document.getElementById(nodeId);
       if (!node || node.dataset.plotlyRendered === "1") return;
-      node.innerHTML = '<div class="chart-placeholder">График загрузится при прокрутке</div>';
+      node.innerHTML = "";
+      const placeholder = document.createElement("div");
+      placeholder.className = "chart-placeholder";
+      const label = document.createElement("div");
+      label.textContent = text;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Построить график";
+      button.addEventListener("click", () => {
+        visibleChartNodeIds.add(nodeId);
+        renderScheduledChart(nodeId);
+      });
+      placeholder.appendChild(label);
+      placeholder.appendChild(button);
+      node.appendChild(placeholder);
     }
 
     function isNearViewport(target) {
@@ -2238,7 +2266,8 @@
         window.requestAnimationFrame(() => renderScheduledChart(nodeId));
         return;
       }
-      showChartPlaceholder(nodeId);
+      showChartPlaceholder(nodeId, "График строится по запросу");
+      if (!options.auto) return;
       if (isNearViewport(target)) {
         window.requestAnimationFrame(() => renderScheduledChart(nodeId));
         return;
@@ -5161,12 +5190,8 @@
       }
       const detailRows = detailRowsFromSorted(sortedRows);
       renderKpi(filteredRows);
-      queueChartRender("chart-by-developer", () => renderByDeveloper(filteredRows), {
-        immediate: true
-      });
-      queueChartRender("chart-by-object", () => renderByObject(filteredRows), {
-        immediate: true
-      });
+      queueChartRender("chart-by-developer", () => renderByDeveloper(filteredRows));
+      queueChartRender("chart-by-object", () => renderByObject(filteredRows));
       queueChartRender("chart-pareto-developer", () => renderParetoByDeveloper(filteredRows));
       queueChartRender("chart-pareto-object", () => renderParetoByObject(filteredRows));
       renderParetoCoreLists(filteredRows);
