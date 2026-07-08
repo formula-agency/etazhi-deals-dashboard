@@ -189,11 +189,59 @@
       color: var(--ink);
       font-weight: 600;
     }
+    button {
+      transition:
+        transform 120ms ease,
+        box-shadow 160ms ease,
+        background-color 160ms ease,
+        border-color 160ms ease,
+        color 160ms ease,
+        opacity 160ms ease;
+    }
+    button:not(:disabled) {
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+    }
+    button:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 3px 10px rgba(15, 23, 42, 0.10);
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
     #filters-zone #apply-btn {
       background: var(--accent);
       color: #fff;
       border: 1px solid var(--accent);
       font-weight: 700;
+    }
+    #filters-zone #apply-btn.is-loading {
+      position: relative;
+      pointer-events: none;
+      padding-right: 34px;
+    }
+    #filters-zone #apply-btn.is-loading::after {
+      content: "";
+      position: absolute;
+      right: 12px;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.45);
+      border-top-color: #fff;
+      border-radius: 999px;
+      animation: button-spin 800ms linear infinite;
+    }
+    html.is-dashboard-busy #main-zone {
+      cursor: progress;
+    }
+    @keyframes button-spin {
+      to {
+        transform: rotate(360deg);
+      }
     }
     #main-zone {
       grid-area: main;
@@ -806,34 +854,6 @@
           <span class="kpi-label">Сделки</span>
           <span class="kpi-value" id="kpi-deals">0</span>
         </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Выручка</span>
-          <span class="kpi-value" id="kpi-sales">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Средний чек</span>
-          <span class="kpi-value" id="kpi-avg">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Площадь, м²</span>
-          <span class="kpi-value" id="kpi-area">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Ставка, ₽/м²</span>
-          <span class="kpi-value" id="kpi-rate">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Проблемы площади</span>
-          <span class="kpi-value" id="kpi-area-issues">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Ставка без конфликтов</span>
-          <span class="kpi-value" id="kpi-rate-clean">0</span>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Δ ставки (без конфликтов)</span>
-          <span class="kpi-value" id="kpi-rate-impact">0%</span>
-        </div>
       </div>
     </header>
     <aside id="filters-zone" class="panel">
@@ -929,10 +949,7 @@
       <div class="source-select-hint">Можно выбрать несколько значений</div>
       <label for="chart-metric-select">Метрика сравнения</label>
       <select id="chart-metric-select">
-        <option value="revenue" selected>Выручка, ₽</option>
-        <option value="deal_count">Количество сделок, шт.</option>
-        <option value="area">Площадь, м²</option>
-        <option value="weighted_rate">Взвешенная ставка, ₽/м²</option>
+        <option value="deal_count" selected>Количество сделок, шт.</option>
       </select>
       <label for="chart-top-n-select">Top N</label>
       <select id="chart-top-n-select">
@@ -1005,10 +1022,7 @@
             <label for="yoy-metric-select">
               Метрика YoY
               <select id="yoy-metric-select">
-                <option value="revenue">Выручка, ₽</option>
-                <option value="deal_count">Количество сделок, шт.</option>
-                <option value="area">Площадь, м²</option>
-                <option value="weighted_rate" selected>Взвешенная ставка, ₽/м²</option>
+                <option value="deal_count" selected>Количество сделок, шт.</option>
               </select>
             </label>
           </div>
@@ -1732,17 +1746,6 @@
     function renderInitialKpi(kpi) {
       if (!kpi) return;
       quickSetText("kpi-deals", quickMoneyFmt.format(Number(kpi.count) || 0));
-      quickSetText("kpi-sales", quickMoneyFmt.format(Number(kpi.sales) || 0));
-      quickSetText("kpi-avg", quickMoneyFmt.format(Number(kpi.avg) || 0));
-      quickSetText("kpi-area", quickAreaFmt.format(Number(kpi.area) || 0));
-      quickSetText("kpi-rate", quickRateFmt.format(Number(kpi.rate) || 0));
-      quickSetText("kpi-area-issues", quickMoneyFmt.format(Number(kpi.areaIssueCount) || 0));
-      quickSetText("kpi-rate-clean", quickRateFmt.format(Number(kpi.cleanRate) || 0));
-      const impact = Number(kpi.impactPercent) || 0;
-      quickSetText(
-        "kpi-rate-impact",
-        (impact > 0 ? "+" : "") + quickPercentFmt.format(impact) + "%"
-      );
     }
 
     function renderInitialCore(core, bodyId, summaryId) {
@@ -1898,8 +1901,8 @@
       overpricingSortKey: "",
       overpricingSortDirection: "",
       searchQuery: "",
-      chartMetric: "revenue",
-      yoyMetric: "weighted_rate",
+      chartMetric: "deal_count",
+      yoyMetric: "deal_count",
       chartTopN: 10,
       highlightOutliers: false,
       selectedDealRowIndex: -1,
@@ -1953,29 +1956,11 @@
       maximumFractionDigits: 1
     });
     const CHART_METRIC_CONFIG = {
-      revenue: {
-        titleSegment: "выручке",
-        valueTitle: "Выручка",
-        axisTitle: "Выручка, ₽",
-        formatter: (value) => moneyFmt.format(value),
-      },
       deal_count: {
         titleSegment: "количеству сделок",
         valueTitle: "Сделки",
         axisTitle: "Сделки, шт.",
         formatter: (value) => moneyFmt.format(value),
-      },
-      area: {
-        titleSegment: "площади",
-        valueTitle: "Площадь",
-        axisTitle: "Площадь, м²",
-        formatter: (value) => areaFmt.format(value),
-      },
-      weighted_rate: {
-        titleSegment: "взвешенной ставке",
-        valueTitle: "Ставка",
-        axisTitle: "Ставка, ₽/м²",
-        formatter: (value) => rateFmt.format(value),
       },
     };
     const CHART_METRIC_OPTIONS = Object.keys(CHART_METRIC_CONFIG);
@@ -2145,6 +2130,12 @@
     let resizeRafId = 0;
     let autoChartRenderTimerId = 0;
     let autoChartRenderInProgress = false;
+    let renderAllTimerId = 0;
+    let renderAllRafId = 0;
+    let renderAllToken = 0;
+    let renderAllInProgress = false;
+    let supplementaryRenderTimerId = 0;
+    let supplementaryRenderToken = 0;
 
     function fillSelect(id, options) {
       renderCheckboxOptions(id, options);
@@ -3121,7 +3112,7 @@
         params.set("month", monthValue);
         hasPayload = true;
       }
-      if (state.yoyMetric && state.yoyMetric !== "weighted_rate") {
+      if (state.yoyMetric && state.yoyMetric !== "deal_count") {
         params.set("yoyMetric", state.yoyMetric);
         hasPayload = true;
       }
@@ -3163,7 +3154,7 @@
       state.areaBins = [];
       state.priceSources = [];
       state.month = "";
-      state.yoyMetric = "weighted_rate";
+      state.yoyMetric = "deal_count";
       state.searchQuery = "";
       state.focusedDealRowIndex = -1;
       state.selectedDealRowIndex = -1;
@@ -3282,7 +3273,7 @@
       rebuildDrillPath();
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     }
 
     function applyDatePreset(presetKey) {
@@ -3584,7 +3575,7 @@
       if (state.focusedDealRowIndex < 0) return;
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     }
 
     function renderOutlierToggleControl() {
@@ -3619,7 +3610,7 @@
         state.sortDirection = nextDirection;
       }
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     }
 
     function adjustedSortableValue(row, sortKey) {
@@ -3710,7 +3701,7 @@
         state.adjustedSortDirection = nextDirection;
       }
       state.adjustedPage = 1;
-      renderAll();
+      scheduleRenderAll();
     }
 
     function toggleAreaIssuesSort(sortKey) {
@@ -3730,7 +3721,7 @@
         state.areaIssuesSortDirection = nextDirection;
       }
       state.areaIssuesPage = 1;
-      renderAll();
+      scheduleRenderAll();
     }
 
     function toggleOverpricingSort(sortKey) {
@@ -3750,7 +3741,7 @@
         state.overpricingSortDirection = nextDirection;
       }
       state.overpricingPage = 1;
-      renderAll();
+      scheduleRenderAll();
     }
 
     function renderDrillPath() {
@@ -3763,56 +3754,7 @@
     }
 
     function renderKpi(rows) {
-      const totals = memoizedAggregation(rows, "kpi_totals", () => {
-        let salesAmount = 0;
-        let totalArea = 0;
-        let cleanSalesAmount = 0;
-        let cleanTotalArea = 0;
-        let areaIssueCount = 0;
-        let areaConflictCount = 0;
-        rows.forEach((row) => {
-          const amount = Number(row.deal_amount) || 0;
-          const area = Math.max(0, Number(row.deal_area_sqm) || 0);
-          const hasConflict = String(row.deal_area_issue_reason || "") === "source_conflict";
-          salesAmount += amount;
-          totalArea += area;
-          if (Boolean(row.deal_area_suspicious)) areaIssueCount += 1;
-          if (hasConflict) {
-            areaConflictCount += 1;
-          } else {
-            cleanSalesAmount += amount;
-            cleanTotalArea += area;
-          }
-        });
-        const count = rows.length;
-        const rate = safeRate(salesAmount, totalArea);
-        const cleanRate = safeRate(cleanSalesAmount, cleanTotalArea);
-        const impactPercent = rate ? ((cleanRate - rate) / rate) * 100 : 0;
-        return {
-          count,
-          sales: salesAmount,
-          avg: count ? salesAmount / count : 0,
-          area: totalArea,
-          rate,
-          areaIssueCount,
-          areaConflictCount,
-          cleanRate,
-          impactPercent,
-        };
-      });
-      document.getElementById("kpi-deals").textContent = moneyFmt.format(totals.count);
-      document.getElementById("kpi-sales").textContent = moneyFmt.format(totals.sales);
-      document.getElementById("kpi-avg").textContent = moneyFmt.format(totals.avg);
-      document.getElementById("kpi-area").textContent = areaFmt.format(totals.area);
-      document.getElementById("kpi-rate").textContent = rateFmt.format(totals.rate);
-      document.getElementById("kpi-area-issues").textContent = moneyFmt.format(
-        totals.areaIssueCount
-      );
-      document.getElementById("kpi-rate-clean").textContent = rateFmt.format(totals.cleanRate);
-      const impactPrefix = totals.impactPercent > 0 ? "+" : "";
-      document.getElementById("kpi-rate-impact").textContent = (
-        impactPrefix + percentFmt.format(totals.impactPercent) + "%"
-      );
+      document.getElementById("kpi-deals").textContent = moneyFmt.format(rows.length);
     }
 
     function aggregate(rows, idKey, labelKey) {
@@ -3993,7 +3935,7 @@
           setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
           rebuildDrillPath();
           resetTablePage();
-          renderAll();
+          scheduleRenderAll();
         }
       });
 
@@ -4010,7 +3952,7 @@
           setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
           rebuildDrillPath();
           resetTablePage();
-          renderAll();
+          scheduleRenderAll();
         }
       });
     }
@@ -4034,7 +3976,7 @@
     function renderComparisonChart(rows, options) {
       const metricKey = CHART_METRIC_OPTIONS.includes(state.chartMetric)
         ? state.chartMetric
-        : "revenue";
+        : "deal_count";
       const metricConfig = CHART_METRIC_CONFIG[metricKey];
       const agg = topNWithOther(
         aggregate(rows, options.idKey, options.labelKey),
@@ -4174,7 +4116,7 @@
         setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
         rebuildDrillPath();
         resetTablePage();
-        renderAll();
+        scheduleRenderAll();
         }
       });
     }
@@ -4205,7 +4147,7 @@
         setMultiSelectControl("object-select", state.objectIds, AVAILABLE_OBJECT_IDS);
         rebuildDrillPath();
         resetTablePage();
-        renderAll();
+        scheduleRenderAll();
         }
       });
     }
@@ -4453,7 +4395,7 @@
           ? -1
           : selectedRowIndex;
         resetTablePage();
-        renderAll();
+        scheduleRenderAll();
       });
     }
 
@@ -4611,7 +4553,7 @@
       const body = document.getElementById("yoy-quarter-body");
       const metricKey = CHART_METRIC_OPTIONS.includes(state.yoyMetric)
         ? state.yoyMetric
-        : "weighted_rate";
+        : "deal_count";
       const metricConfig = CHART_METRIC_CONFIG[metricKey];
       const comparison = resolveQuarterYoYPair(rows);
 
@@ -4752,7 +4694,7 @@
         state.focusedDealRowIndex = -1;
         rebuildDrillPath();
         resetTablePage();
-        renderAll();
+        scheduleRenderAll();
       });
     }
 
@@ -5202,6 +5144,79 @@
       };
     }
 
+    function setDashboardBusy(isBusy) {
+      renderAllInProgress = Boolean(isBusy);
+      document.documentElement.classList.toggle("is-dashboard-busy", renderAllInProgress);
+
+      const applyButton = document.getElementById("apply-btn");
+      if (applyButton) {
+        applyButton.disabled = renderAllInProgress;
+        applyButton.classList.toggle("is-loading", renderAllInProgress);
+        applyButton.textContent = renderAllInProgress ? "Применяется" : "Применить";
+      }
+
+      const resetButton = document.getElementById("reset-btn");
+      if (resetButton) {
+        resetButton.disabled = renderAllInProgress;
+      }
+    }
+
+    function scheduleSupplementaryRender(detailRows, filteredRows) {
+      const renderToken = ++supplementaryRenderToken;
+      if (supplementaryRenderTimerId) {
+        window.clearTimeout(supplementaryRenderTimerId);
+      }
+
+      supplementaryRenderTimerId = window.setTimeout(() => {
+        supplementaryRenderTimerId = 0;
+        requestIdleWork(() => {
+          if (renderToken !== supplementaryRenderToken) return;
+          renderOverpricingBinCards(filteredRows);
+          renderAdjustedDetails(detailRows);
+          renderAreaIssues(detailRows);
+          renderOverpricingReport(filteredRows);
+        }, 700);
+      }, 40);
+    }
+
+    function scheduleRenderAll() {
+      const renderToken = ++renderAllToken;
+      supplementaryRenderToken += 1;
+      if (supplementaryRenderTimerId) {
+        window.clearTimeout(supplementaryRenderTimerId);
+        supplementaryRenderTimerId = 0;
+      }
+      if (renderAllTimerId) {
+        window.clearTimeout(renderAllTimerId);
+      }
+      if (renderAllRafId) {
+        window.cancelAnimationFrame(renderAllRafId);
+        renderAllRafId = 0;
+      }
+
+      setDashboardBusy(true);
+      renderAllTimerId = window.setTimeout(() => {
+        renderAllTimerId = 0;
+        renderAllRafId = window.requestAnimationFrame(() => {
+          renderAllRafId = 0;
+          if (renderToken !== renderAllToken) return;
+
+          try {
+            renderAll();
+          } catch (error) {
+            setDashboardBusy(false);
+            throw error;
+          }
+
+          window.requestAnimationFrame(() => {
+            if (renderToken === renderAllToken) {
+              setDashboardBusy(false);
+            }
+          });
+        });
+      }, 0);
+    }
+
     function renderAll() {
       const renderStartedAt = performance.now();
       const mortgageCandidates = baseFilteredDeals("mortgage");
@@ -5234,7 +5249,6 @@
       queueChartRender("chart-by-date-count", () => renderDealCountByDate(filteredRows));
       queueChartRender("chart-by-date-rate", () => renderRateByDate(filteredRows));
       queueChartRender("chart-quarter-yoy", () => renderQuarterYoY(filteredRows));
-      renderOverpricingBinCards(filteredRows);
       renderSortIndicators();
       renderSearchControls();
       renderDetailFocusControls(filteredRows);
@@ -5242,9 +5256,7 @@
       renderDatePresetControls();
       renderChartControls();
       renderDetails(detailRows);
-      renderAdjustedDetails(detailRows);
-      renderAreaIssues(detailRows);
-      renderOverpricingReport(filteredRows);
+      scheduleSupplementaryRender(detailRows, filteredRows);
       renderDealDetails();
       renderDrillPath();
       syncHashState();
@@ -5300,7 +5312,7 @@
       const input = document.getElementById("page-input");
       const requestedPage = Number(input.value);
       state.page = clampPage(requestedPage, renderDataContext().filteredRows.length);
-      renderAll();
+      scheduleRenderAll();
     }
 
     function adjustedRowsForCurrentState() {
@@ -5323,7 +5335,7 @@
         adjustedRowsForCurrentState().length,
         state.adjustedPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     }
 
     function applyAreaIssuesPageInput() {
@@ -5334,7 +5346,7 @@
         areaIssueRowsForCurrentState().length,
         state.areaIssuesPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     }
 
     function applyOverpricingPageInput() {
@@ -5345,7 +5357,7 @@
         overpricingRowsForCurrentState().length,
         state.overpricingPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     }
 
     document.getElementById("page-size-select").addEventListener("change", () => {
@@ -5356,17 +5368,17 @@
       }
       state.pageSize = selectedSize;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("page-prev").addEventListener("click", () => {
       state.page = clampPage(state.page - 1, renderDataContext().filteredRows.length);
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("page-next").addEventListener("click", () => {
       state.page = clampPage(state.page + 1, renderDataContext().filteredRows.length);
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("page-input").addEventListener("change", applyPageInput);
@@ -5386,7 +5398,7 @@
       }
       state.adjustedPageSize = selectedSize;
       state.adjustedPage = 1;
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("adjusted-page-prev").addEventListener("click", () => {
@@ -5395,7 +5407,7 @@
         adjustedRowsForCurrentState().length,
         state.adjustedPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("adjusted-page-next").addEventListener("click", () => {
@@ -5404,7 +5416,7 @@
         adjustedRowsForCurrentState().length,
         state.adjustedPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("adjusted-page-input").addEventListener(
@@ -5427,7 +5439,7 @@
       }
       state.areaIssuesPageSize = selectedSize;
       state.areaIssuesPage = 1;
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("area-issues-page-prev").addEventListener("click", () => {
@@ -5436,7 +5448,7 @@
         areaIssueRowsForCurrentState().length,
         state.areaIssuesPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("area-issues-page-next").addEventListener("click", () => {
@@ -5445,7 +5457,7 @@
         areaIssueRowsForCurrentState().length,
         state.areaIssuesPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("area-issues-page-input").addEventListener(
@@ -5468,7 +5480,7 @@
       }
       state.overpricingPageSize = selectedSize;
       state.overpricingPage = 1;
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("overpricing-page-prev").addEventListener("click", () => {
@@ -5477,7 +5489,7 @@
         overpricingRowsForCurrentState().length,
         state.overpricingPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("overpricing-page-next").addEventListener("click", () => {
@@ -5486,7 +5498,7 @@
         overpricingRowsForCurrentState().length,
         state.overpricingPageSize
       );
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("overpricing-page-input").addEventListener(
@@ -5519,40 +5531,40 @@
       }
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("mortgage-lender-select").addEventListener("change", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
       state.mortgageLenders = readMortgageLenderControl();
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("mortgage-lender-select-all").addEventListener("click", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
       state.mortgageLenders = [];
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("mortgage-lender-reset").addEventListener("click", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
       state.mortgageLenders = [];
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("detail-search-input").addEventListener("input", () => {
       state.searchQuery = document.getElementById("detail-search-input").value;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("detail-search-clear").addEventListener("click", () => {
       if (!state.searchQuery) return;
       state.searchQuery = "";
       document.getElementById("detail-search-input").value = "";
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("detail-focus-clear").addEventListener("click", () => {
       clearFocusedDeal();
@@ -5567,7 +5579,7 @@
         return;
       }
       state.chartMetric = selectedMetric;
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("yoy-metric-select").addEventListener("change", () => {
       const selectedMetric = document.getElementById("yoy-metric-select").value;
@@ -5576,7 +5588,7 @@
         return;
       }
       state.yoyMetric = selectedMetric;
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("chart-top-n-select").addEventListener("change", () => {
       const selectedTopN = Number(document.getElementById("chart-top-n-select").value);
@@ -5585,11 +5597,11 @@
         return;
       }
       state.chartTopN = selectedTopN;
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("scatter-outlier-toggle").addEventListener("click", () => {
       state.highlightOutliers = !state.highlightOutliers;
-      renderAll();
+      scheduleRenderAll();
     });
     document.getElementById("deal-details-close").addEventListener("click", () => {
       closeDealDetails();
@@ -5606,7 +5618,7 @@
     window.addEventListener("hashchange", () => {
       restoreStateFromHash();
       syncFilterControlsFromState();
-      renderAll();
+      scheduleRenderAll();
     });
     window.addEventListener("resize", () => {
       schedulePlotResize();
@@ -5631,7 +5643,7 @@
       rebuildDrillPath();
       state.focusedDealRowIndex = -1;
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
 
     document.getElementById("reset-btn").addEventListener("click", () => {
@@ -5648,8 +5660,8 @@
       state.month = "";
       state.drillPath = [];
       state.searchQuery = "";
-      state.chartMetric = "revenue";
-      state.yoyMetric = "weighted_rate";
+      state.chartMetric = "deal_count";
+      state.yoyMetric = "deal_count";
       state.chartTopN = 10;
       state.highlightOutliers = false;
       state.adjustedPage = 1;
@@ -5684,10 +5696,10 @@
       document.getElementById("yoy-metric-select").value = state.yoyMetric;
       document.getElementById("chart-top-n-select").value = String(state.chartTopN);
       resetTablePage();
-      renderAll();
+      scheduleRenderAll();
     });
 
-    renderAll();
+    scheduleRenderAll();
     }
   </script>
 </body>
