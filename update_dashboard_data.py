@@ -19,7 +19,7 @@ HTML_PATH = ROOT / "index.html"
 DATA_JSON_PATH = ROOT / "dashboard-data.json"
 DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
-DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_25_06_2026.xlsx"
+DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_10_08_2026_без_дашборда.xlsx"
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
 DATA_GZIP_MARKER = '<script id="dashboard-data-gzip" type="text/plain">'
 SUMMARY_MARKER = '<script id="dashboard-summary-data" type="application/json">'
