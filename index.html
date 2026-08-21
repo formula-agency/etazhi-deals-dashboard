@@ -2125,6 +2125,8 @@
       displayModeBar: false,
       responsive: true
     };
+    const CHART_RENDER_IDLE_DELAY_MS = 900;
+    const CHART_RENDER_STEP_DELAY_MS = 350;
     const chartRenderers = new Map();
     const visibleChartNodeIds = new Set();
     const pendingAutoChartNodeIds = new Set();
@@ -2138,6 +2140,7 @@
     let renderAllInProgress = false;
     let supplementaryRenderTimerId = 0;
     let supplementaryRenderToken = 0;
+    let searchRenderTimerId = 0;
 
     function fillSelect(id, options) {
       renderCheckboxOptions(id, options);
@@ -2242,7 +2245,7 @@
       }) || pendingIds[0] || "";
     }
 
-    function scheduleAutoChartDrain(delayMs = 250) {
+    function scheduleAutoChartDrain(delayMs = CHART_RENDER_IDLE_DELAY_MS) {
       if (autoChartRenderTimerId || autoChartRenderInProgress) return;
       autoChartRenderTimerId = window.setTimeout(() => {
         autoChartRenderTimerId = 0;
@@ -2258,13 +2261,13 @@
       autoChartRenderInProgress = true;
       await renderScheduledChart(nodeId);
       autoChartRenderInProgress = false;
-      if (pendingAutoChartNodeIds.size) scheduleAutoChartDrain(150);
+      if (pendingAutoChartNodeIds.size) scheduleAutoChartDrain(CHART_RENDER_STEP_DELAY_MS);
     }
 
-    function scheduleAutoChartRender(nodeId) {
-      if (!nodeId || visibleChartNodeIds.has(nodeId)) return;
+    function scheduleAutoChartRender(nodeId, delayMs = CHART_RENDER_IDLE_DELAY_MS) {
+      if (!nodeId) return;
       pendingAutoChartNodeIds.add(nodeId);
-      scheduleAutoChartDrain();
+      scheduleAutoChartDrain(delayMs);
     }
 
     function ensureChartObserver() {
@@ -2277,7 +2280,7 @@
           const nodeId = node.id || "";
           if (!nodeId) return;
           chartObserver.unobserve(entry.target);
-          renderScheduledChart(nodeId);
+          scheduleAutoChartRender(nodeId, 100);
         });
       }, { root: null, rootMargin: "320px 0px", threshold: 0.01 });
       return chartObserver;
@@ -2287,16 +2290,19 @@
       const target = chartViewportTarget(nodeId);
       if (!target) return;
       chartRenderers.set(nodeId, renderChart);
-      if (visibleChartNodeIds.has(nodeId) || options.immediate) {
+      if (options.immediate) {
         window.requestAnimationFrame(() => renderScheduledChart(nodeId));
         return;
       }
-      showChartPlaceholder(nodeId);
+      if (!visibleChartNodeIds.has(nodeId)) showChartPlaceholder(nodeId);
       if (options.auto === false) return;
-      scheduleAutoChartRender(nodeId);
+      scheduleAutoChartRender(
+        nodeId,
+        visibleChartNodeIds.has(nodeId) ? CHART_RENDER_IDLE_DELAY_MS : 250
+      );
       const observer = ensureChartObserver();
       if (!observer) {
-        scheduleAutoChartRender(nodeId);
+        scheduleAutoChartRender(nodeId, 250);
         return;
       }
       observer.observe(target);
@@ -3072,6 +3078,14 @@
       });
     }
 
+    function setMortgageLenderControlToAll() {
+      const select = document.getElementById("mortgage-lender-select");
+      Array.from(select.options).forEach((option) => {
+        if (!option.disabled) option.selected = true;
+      });
+      state.mortgageLenders = [];
+    }
+
     function normalizeMonthValue(value) {
       const monthValue = String(value || "").trim();
       if (monthValue.length !== 7 || monthValue[4] !== "-") return "";
@@ -3287,10 +3301,10 @@
       if (state.month) state.drillPath.push("deals");
     }
 
-    function renderDatePresetControls() {
+    function renderDatePresetControls(activePresetKey = state.datePreset) {
       document.querySelectorAll("[data-date-preset]").forEach((button) => {
         const presetKey = button.getAttribute("data-date-preset") || "";
-        const isActive = presetKey === state.datePreset;
+        const isActive = presetKey === activePresetKey;
         button.classList.toggle("is-active", isActive);
         button.setAttribute("aria-pressed", isActive ? "true" : "false");
       });
@@ -3312,7 +3326,7 @@
       const presetRange = datePresetRange(presetKey);
       if (!presetRange) return;
       setDateControls(presetRange.dateFrom, presetRange.dateTo);
-      applyDateRange(presetRange.dateFrom, presetRange.dateTo);
+      renderDatePresetControls(presetKey);
     }
 
     function normalizedSearchQuery() {
@@ -5213,6 +5227,15 @@
     function scheduleRenderAll() {
       const renderToken = ++renderAllToken;
       supplementaryRenderToken += 1;
+      if (searchRenderTimerId) {
+        window.clearTimeout(searchRenderTimerId);
+        searchRenderTimerId = 0;
+      }
+      pendingAutoChartNodeIds.clear();
+      if (autoChartRenderTimerId) {
+        window.clearTimeout(autoChartRenderTimerId);
+        autoChartRenderTimerId = 0;
+      }
       if (supplementaryRenderTimerId) {
         window.clearTimeout(supplementaryRenderTimerId);
         supplementaryRenderTimerId = 0;
@@ -5246,6 +5269,16 @@
           });
         });
       }, 0);
+    }
+
+    function scheduleSearchRender() {
+      if (searchRenderTimerId) {
+        window.clearTimeout(searchRenderTimerId);
+      }
+      searchRenderTimerId = window.setTimeout(() => {
+        searchRenderTimerId = 0;
+        scheduleRenderAll();
+      }, 250);
     }
 
     function renderAll() {
@@ -5544,7 +5577,7 @@
     function onDateControlChange() {
       const dateRange = readDateControls();
       setDateControls(dateRange.dateFrom, dateRange.dateTo);
-      applyDateRange(dateRange.dateFrom, dateRange.dateTo);
+      renderDatePresetControls(matchingDatePreset(dateRange.dateFrom, dateRange.dateTo));
     }
     document.getElementById("date-from").addEventListener("change", onDateControlChange);
     document.getElementById("date-to").addEventListener("change", onDateControlChange);
@@ -5560,35 +5593,24 @@
       if (state.purchaseMode !== "mortgage") {
         state.mortgageLenders = [];
       }
-      state.focusedDealRowIndex = -1;
-      resetTablePage();
-      scheduleRenderAll();
+      renderMortgageLenderControl(baseFilteredDeals("mortgage"));
     });
     document.getElementById("mortgage-lender-select").addEventListener("change", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
       state.mortgageLenders = readMortgageLenderControl();
-      state.focusedDealRowIndex = -1;
-      resetTablePage();
-      scheduleRenderAll();
     });
     document.getElementById("mortgage-lender-select-all").addEventListener("click", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
-      state.mortgageLenders = [];
-      state.focusedDealRowIndex = -1;
-      resetTablePage();
-      scheduleRenderAll();
+      setMortgageLenderControlToAll();
     });
     document.getElementById("mortgage-lender-reset").addEventListener("click", () => {
       if (normalizePurchaseMode(state.purchaseMode) !== "mortgage") return;
-      state.mortgageLenders = [];
-      state.focusedDealRowIndex = -1;
-      resetTablePage();
-      scheduleRenderAll();
+      setMortgageLenderControlToAll();
     });
     document.getElementById("detail-search-input").addEventListener("input", () => {
       state.searchQuery = document.getElementById("detail-search-input").value;
       resetTablePage();
-      scheduleRenderAll();
+      scheduleSearchRender();
     });
     document.getElementById("detail-search-clear").addEventListener("click", () => {
       if (!state.searchQuery) return;
