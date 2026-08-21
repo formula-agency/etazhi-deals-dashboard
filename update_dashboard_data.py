@@ -20,6 +20,7 @@ DATA_JSON_PATH = ROOT / "dashboard-data.json"
 DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
 DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_10_08_2026_без_дашборда.xlsx"
+DASHBOARD_YEAR = 2026
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
 DATA_GZIP_MARKER = '<script id="dashboard-data-gzip" type="text/plain">'
 SUMMARY_MARKER = '<script id="dashboard-summary-data" type="application/json">'
@@ -274,6 +275,15 @@ def choose_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         grouped.setdefault(deal_id, []).append(row)
     return [max(items, key=duplicate_score) for items in grouped.values()]
+
+
+def filter_rows_by_dashboard_year(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    year_prefix = f"{DASHBOARD_YEAR}-"
+    return [
+        row
+        for row in rows
+        if date_iso(row.get("Дата договора")).startswith(year_prefix)
+    ]
 
 
 def same_number(left: Any, right: Any) -> bool:
@@ -688,6 +698,7 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
         sources[row.get("deal_amount_source", "missing")] += 1
         area_issues[row.get("deal_area_issue_reason", "none")] += 1
     return {
+        "dashboard_year": DASHBOARD_YEAR,
         "source_rows": source_row_count,
         "dashboard_deals": len(data["deals"]),
         "developers": len(data["developers"]),
@@ -711,6 +722,7 @@ def main() -> None:
     current = parse_current_dashboard()
     source_rows = load_deal_rows()
     selected_rows = choose_rows(source_rows)
+    selected_rows = filter_rows_by_dashboard_year(selected_rows)
     data = build_dashboard_data(current, selected_rows)
     write_dashboard_data(data)
     print(json.dumps(summarize(data, len(source_rows)), ensure_ascii=False, indent=2))
