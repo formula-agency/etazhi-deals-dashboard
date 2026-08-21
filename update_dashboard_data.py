@@ -646,8 +646,7 @@ def write_dashboard_data(data: dict[str, Any]) -> None:
         separators=(",", ":"),
     )
     SUMMARY_JSON_PATH.write_text(summary_payload, encoding="utf-8")
-    inline_gzip_payload = base64.b64encode(compressed_payload).decode("ascii")
-    write_inline_dashboard_data(inline_gzip_payload, summary_payload)
+    write_inline_dashboard_data(payload, summary_payload)
 
 
 def safe_json_for_script(payload: str) -> str:
@@ -682,11 +681,11 @@ def remove_json_script(html: str, marker: str) -> str:
     return html[:line_start] + html[line_end:]
 
 
-def write_inline_dashboard_data(inline_gzip_payload: str, summary_payload: str) -> None:
+def write_inline_dashboard_data(inline_payload: str, summary_payload: str) -> None:
     html = HTML_PATH.read_text(encoding="utf-8")
-    html = remove_json_script(html, DATA_MARKER)
+    html = remove_json_script(html, DATA_GZIP_MARKER)
     html = replace_or_insert_json_script(html, SUMMARY_MARKER, summary_payload)
-    html = replace_or_insert_json_script(html, DATA_GZIP_MARKER, inline_gzip_payload)
+    html = replace_or_insert_json_script(html, DATA_MARKER, inline_payload)
     HTML_PATH.write_text(html, encoding="utf-8")
 
 
