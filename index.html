@@ -858,9 +858,9 @@
     </header>
     <aside id="filters-zone" class="panel">
       <label for="date-from">Дата от</label>
-      <input id="date-from" type="date" />
+      <input id="date-from" type="date" min="2026-01-01" max="2026-12-31" />
       <label for="date-to">Дата до</label>
-      <input id="date-to" type="date" />
+      <input id="date-to" type="date" min="2026-01-01" max="2026-12-31" />
       <label for="date-preset-7d">Период</label>
       <div class="date-presets">
         <button
@@ -1909,6 +1909,8 @@
       focusedDealRowIndex: -1
     };
     const DATE_PRESET_KEYS = ["7d", "30d", "month", "ytd"];
+    const DASHBOARD_DATE_MIN = "2026-01-01";
+    const DASHBOARD_DATE_MAX = "2026-12-31";
     const PURCHASE_MODE_OPTIONS = ["all", "mortgage", "non_mortgage"];
     const MORTGAGE_LENDER_NONE_TOKEN = "__none__";
     const MORTGAGE_LENDER_EMPTY_KEY = "__empty__";
@@ -2781,7 +2783,27 @@
     function normalizeDateInput(value) {
       const parsedDate = parseDateInput(value);
       if (!parsedDate) return "";
-      return localDateValue(parsedDate);
+      const dateValue = localDateValue(parsedDate);
+      if (dateValue < DASHBOARD_DATE_MIN || dateValue > DASHBOARD_DATE_MAX) return "";
+      return dateValue;
+    }
+
+    function clampDashboardDateValue(value) {
+      const parsedDate = parseDateInput(value);
+      if (!parsedDate) return "";
+      const dateValue = localDateValue(parsedDate);
+      if (dateValue < DASHBOARD_DATE_MIN) return DASHBOARD_DATE_MIN;
+      if (dateValue > DASHBOARD_DATE_MAX) return DASHBOARD_DATE_MAX;
+      return dateValue;
+    }
+
+    function normalizeDateRange(dateFrom, dateTo) {
+      const normalizedFrom = normalizeDateInput(dateFrom);
+      const normalizedTo = normalizeDateInput(dateTo);
+      if (normalizedFrom && normalizedTo && normalizedFrom > normalizedTo) {
+        return { dateFrom: normalizedTo, dateTo: normalizedFrom };
+      }
+      return { dateFrom: normalizedFrom, dateTo: normalizedTo };
     }
 
     function todayLocalDate() {
@@ -2799,26 +2821,28 @@
       const today = todayLocalDate();
       if (presetKey === "7d") {
         return {
-          dateFrom: localDateValue(shiftLocalDate(today, -6)),
-          dateTo: localDateValue(today),
+          dateFrom: clampDashboardDateValue(localDateValue(shiftLocalDate(today, -6))),
+          dateTo: clampDashboardDateValue(localDateValue(today)),
         };
       }
       if (presetKey === "30d") {
         return {
-          dateFrom: localDateValue(shiftLocalDate(today, -29)),
-          dateTo: localDateValue(today),
+          dateFrom: clampDashboardDateValue(localDateValue(shiftLocalDate(today, -29))),
+          dateTo: clampDashboardDateValue(localDateValue(today)),
         };
       }
       if (presetKey === "month") {
         return {
-          dateFrom: localDateValue(new Date(today.getFullYear(), today.getMonth(), 1)),
-          dateTo: localDateValue(today),
+          dateFrom: clampDashboardDateValue(
+            localDateValue(new Date(today.getFullYear(), today.getMonth(), 1))
+          ),
+          dateTo: clampDashboardDateValue(localDateValue(today)),
         };
       }
       if (presetKey === "ytd") {
         return {
-          dateFrom: localDateValue(new Date(today.getFullYear(), 0, 1)),
-          dateTo: localDateValue(today),
+          dateFrom: DASHBOARD_DATE_MIN,
+          dateTo: clampDashboardDateValue(localDateValue(today)),
         };
       }
       return null;
@@ -2837,15 +2861,22 @@
     }
 
     function setDateControls(dateFrom, dateTo) {
-      document.getElementById("date-from").value = dateFrom || "";
-      document.getElementById("date-to").value = dateTo || "";
+      const dateRange = normalizeDateRange(dateFrom, dateTo);
+      const fromInput = document.getElementById("date-from");
+      const toInput = document.getElementById("date-to");
+      [fromInput, toInput].forEach((input) => {
+        input.min = DASHBOARD_DATE_MIN;
+        input.max = DASHBOARD_DATE_MAX;
+      });
+      fromInput.value = dateRange.dateFrom;
+      toInput.value = dateRange.dateTo;
     }
 
     function readDateControls() {
-      return {
-        dateFrom: normalizeDateInput(document.getElementById("date-from").value),
-        dateTo: normalizeDateInput(document.getElementById("date-to").value),
-      };
+      return normalizeDateRange(
+        document.getElementById("date-from").value,
+        document.getElementById("date-to").value
+      );
     }
 
     function readPurchaseModeControl() {
