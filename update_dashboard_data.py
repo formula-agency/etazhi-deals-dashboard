@@ -19,7 +19,15 @@ HTML_PATH = ROOT / "index.html"
 DATA_JSON_PATH = ROOT / "dashboard-data.json"
 DATA_JSON_GZIP_PATH = ROOT / "dashboard-data.json.gz"
 SUMMARY_JSON_PATH = ROOT / "dashboard-summary.json"
-DATA_PATH = ROOT / "OLD_DATA" / "Тюмень_Сделки_Экспозиция_10_08_2026_без_дашборда.xlsx"
+DATA_DIR = ROOT / "OLD_DATA"
+DEAL_FILE_PATTERNS = (
+    "*Сделки*Экспозиция*без_дашборда*.xlsx",
+    "*Сделки*Экспозиция*.xlsx",
+)
+INVENTORY_FILE_PATTERNS = (
+    "*Запроектированные*остатки*корпус*.xlsx",
+    "*остатки*корпус*.xlsx",
+)
 DASHBOARD_YEAR = 2026
 DATA_MARKER = '<script id="dashboard-data" type="application/json">'
 DATA_GZIP_MARKER = '<script id="dashboard-data-gzip" type="text/plain">'
@@ -187,6 +195,38 @@ def area_bin(area: float) -> str:
     return "(81,+inf]"
 
 
+def latest_matching_file(patterns: tuple[str, ...], required: bool = True) -> Path | None:
+    if not DATA_DIR.exists():
+        if required:
+            raise FileNotFoundError(f"Не найдена папка с данными: {DATA_DIR}")
+        return None
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for path in DATA_DIR.glob(pattern):
+            if path.name.startswith("~$") or path in seen or not path.is_file():
+                continue
+            seen.add(path)
+            candidates.append(path)
+
+    if not candidates:
+        if required:
+            raise FileNotFoundError(
+                f"В {DATA_DIR} не найден файл по маскам: {', '.join(patterns)}"
+            )
+        return None
+
+    return max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def source_files() -> dict[str, Path | None]:
+    return {
+        "deals": latest_matching_file(DEAL_FILE_PATTERNS, required=True),
+        "inventory": latest_matching_file(INVENTORY_FILE_PATTERNS, required=False),
+    }
+
+
 def parse_current_dashboard() -> dict[str, Any]:
     html = HTML_PATH.read_text(encoding="utf-8")
     if DATA_MARKER in html:
@@ -239,6 +279,9 @@ def inflate_compact_dashboard_data(payload: dict[str, Any]) -> dict[str, Any]:
         "developers": payload.get("developers", []),
         "objects": payload.get("objects", []),
         "districts": payload.get("districts", []),
+        "inventory": payload.get("inventory", {}),
+        "sourceFiles": payload.get("sourceFiles", {}),
+        "sourceRows": payload.get("sourceRows", {}),
     }
 
 
@@ -443,12 +486,155 @@ def build_dashboard_data(current: dict[str, Any], selected_rows: list[dict[str, 
     }
 
 
-def load_deal_rows() -> list[dict[str, Any]]:
-    workbook = openpyxl.load_workbook(DATA_PATH, read_only=True, data_only=True)
-    worksheet = workbook["Сделки"]
-    iterator = worksheet.iter_rows(values_only=True)
-    headers = [clean_text(value) for value in next(iterator)]
-    return [row_dict(headers, row) for row in iterator]
+def load_deal_rows(path: Path) -> list[dict[str, Any]]:
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        worksheet = workbook["Сделки"]
+        iterator = worksheet.iter_rows(values_only=True)
+        headers = [clean_text(value) for value in next(iterator)]
+        return [row_dict(headers, row) for row in iterator]
+    finally:
+        workbook.close()
+
+
+def load_inventory_rows(path: Path) -> list[dict[str, Any]]:
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        worksheet = workbook["Корпуса"] if "Корпуса" in workbook.sheetnames else workbook.active
+        iterator = worksheet.iter_rows(values_only=True)
+        headers = [clean_text(value) for value in next(iterator)]
+        return [row_dict(headers, row) for row in iterator]
+    finally:
+        workbook.close()
+
+
+def bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return key_text(value) in {"true", "истина", "да", "1", "yes"}
+
+
+def inventory_bucket(label: str) -> dict[str, Any]:
+    text = label or "Не указано"
+    return {
+        "id": group_id("inv", text),
+        "label": text,
+        "buildingCount": 0,
+        "activeBuildingCount": 0,
+        "completedBuildingCount": 0,
+        "projectLots": 0.0,
+        "projectArea": 0.0,
+        "remainingLots": 0.0,
+        "remainingArea": 0.0,
+        "remainingLotsAtRve": 0.0,
+    }
+
+
+def add_inventory_values(bucket: dict[str, Any], values: dict[str, Any]) -> None:
+    bucket["buildingCount"] += 1
+    if values["active"]:
+        bucket["activeBuildingCount"] += 1
+    if values["completed"]:
+        bucket["completedBuildingCount"] += 1
+    bucket["projectLots"] += values["project_lots"]
+    bucket["projectArea"] += values["project_area"]
+    bucket["remainingLots"] += values["remaining_lots"]
+    bucket["remainingArea"] += values["remaining_area"]
+    bucket["remainingLotsAtRve"] += values["remaining_lots_at_rve"]
+
+
+def compact_inventory_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": bucket["id"],
+        "label": bucket["label"],
+        "buildingCount": int(round(bucket["buildingCount"])),
+        "activeBuildingCount": int(round(bucket["activeBuildingCount"])),
+        "completedBuildingCount": int(round(bucket["completedBuildingCount"])),
+        "projectLots": int(round(bucket["projectLots"])),
+        "projectArea": round(bucket["projectArea"], 1),
+        "remainingLots": int(round(bucket["remainingLots"])),
+        "remainingArea": round(bucket["remainingArea"], 1),
+        "remainingLotsAtRve": int(round(bucket["remainingLotsAtRve"])),
+    }
+
+
+def build_inventory_summary(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+
+    rows = load_inventory_rows(path)
+    by_developer: dict[str, dict[str, Any]] = {}
+    by_object: dict[str, dict[str, Any]] = {}
+    by_stage: dict[str, dict[str, Any]] = {}
+    totals = inventory_bucket("Итого")
+
+    for row in rows:
+        developer = clean_text(row.get("Девелопер")) or "Не указано"
+        object_name = clean_text(row.get("ЖК")) or "Не указано"
+        stage = clean_text(row.get("Текущая стадия строительной готовности")) or "Не указано"
+        values = {
+            "active": bool_value(row.get("Корпус активен на текущий момент")),
+            "completed": bool_value(row.get("Корпус сдан на дату среза")),
+            "project_lots": to_number(row.get("Общее количество лотов, шт.")),
+            "project_area": to_number(row.get("Общая площадь, кв.м")),
+            "remaining_lots": to_number(row.get("Оставшееся кол-во лотов, шт.")),
+            "remaining_area": to_number(row.get("Общая оставшаяся площадь лотов, кв.м")),
+            "remaining_lots_at_rve": to_number(
+                row.get("Оставшееся кол-во лотов на момент даты РВЭ, шт.")
+            ),
+        }
+
+        add_inventory_values(totals, values)
+        add_inventory_values(by_developer.setdefault(developer, inventory_bucket(developer)), values)
+        add_inventory_values(by_object.setdefault(object_name, inventory_bucket(object_name)), values)
+
+        stage_bucket = by_stage.setdefault(
+            stage,
+            {"id": group_id("stage", stage), "label": stage, "count": 0, "activeCount": 0},
+        )
+        stage_bucket["count"] += 1
+        if values["active"]:
+            stage_bucket["activeCount"] += 1
+
+    developer_rows = sorted(
+        (compact_inventory_bucket(item) for item in by_developer.values()),
+        key=lambda item: (-item["remainingLots"], -item["activeBuildingCount"], key_text(item["label"])),
+    )
+    object_rows = sorted(
+        (compact_inventory_bucket(item) for item in by_object.values()),
+        key=lambda item: (-item["remainingLots"], -item["projectLots"], key_text(item["label"])),
+    )
+    stage_rows = sorted(
+        by_stage.values(),
+        key=lambda item: (-item["count"], key_text(item["label"])),
+    )
+    total = compact_inventory_bucket(totals)
+
+    return {
+        "sourceFile": path.name,
+        "totalRows": len(rows),
+        "totalBuildings": total["buildingCount"],
+        "activeBuildings": total["activeBuildingCount"],
+        "completedBuildings": total["completedBuildingCount"],
+        "projectLots": total["projectLots"],
+        "projectArea": total["projectArea"],
+        "remainingLots": total["remainingLots"],
+        "remainingArea": total["remainingArea"],
+        "remainingLotsAtRve": total["remainingLotsAtRve"],
+        "byDeveloper": developer_rows,
+        "byObject": object_rows[:100],
+        "byStage": [
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "count": int(item["count"]),
+                "activeCount": int(item["activeCount"]),
+            }
+            for item in stage_rows
+        ],
+    }
 
 
 def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -491,7 +677,7 @@ def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
         deal_rows.append(values)
 
     return {
-        "version": 2,
+        "version": 3,
         "dealFields": DEAL_FIELDS,
         "dealRows": deal_rows,
         "stringTable": string_table,
@@ -500,6 +686,9 @@ def compact_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
         "developers": data["developers"],
         "objects": data["objects"],
         "districts": data["districts"],
+        "inventory": data.get("inventory", {}),
+        "sourceFiles": data.get("sourceFiles", {}),
+        "sourceRows": data.get("sourceRows", {}),
     }
 
 
@@ -615,8 +804,11 @@ def detail_preview_rows(rows: list[dict[str, Any]], limit: int = 50) -> list[dic
 def summary_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     rows = data["deals"]
     return {
-        "version": 1,
+        "version": 2,
         "kpi": kpi_summary(rows),
+        "sourceFiles": data.get("sourceFiles", {}),
+        "sourceRows": data.get("sourceRows", {}),
+        "inventory": data.get("inventory", {}),
         "developers": data["developers"],
         "objects": data["objects"],
         "districts": data["districts"],
@@ -698,6 +890,8 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
         area_issues[row.get("deal_area_issue_reason", "none")] += 1
     return {
         "dashboard_year": DASHBOARD_YEAR,
+        "source_files": data.get("sourceFiles", {}),
+        "source_rows_by_file": data.get("sourceRows", {}),
         "source_rows": source_row_count,
         "dashboard_deals": len(data["deals"]),
         "developers": len(data["developers"]),
@@ -707,6 +901,13 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
         "date_max": max(dates) if dates else None,
         "price_sources": dict(sorted(sources.items())),
         "area_issues": dict(sorted(area_issues.items())),
+        "inventory": {
+            "source_file": data.get("inventory", {}).get("sourceFile"),
+            "total_buildings": data.get("inventory", {}).get("totalBuildings"),
+            "active_buildings": data.get("inventory", {}).get("activeBuildings"),
+            "remaining_lots": data.get("inventory", {}).get("remainingLots"),
+            "remaining_area": data.get("inventory", {}).get("remainingArea"),
+        },
         "html_size_mb": round(HTML_PATH.stat().st_size / (1024 * 1024), 2),
         "data_json_size_mb": round(DATA_JSON_PATH.stat().st_size / (1024 * 1024), 2)
         if DATA_JSON_PATH.exists()
@@ -719,10 +920,25 @@ def summarize(data: dict[str, Any], source_row_count: int) -> dict[str, Any]:
 
 def main() -> None:
     current = parse_current_dashboard()
-    source_rows = load_deal_rows()
+    files = source_files()
+    deal_path = files["deals"]
+    inventory_path = files["inventory"]
+    if deal_path is None:
+        raise RuntimeError("Не найден файл сделок")
+
+    source_rows = load_deal_rows(deal_path)
     selected_rows = choose_rows(source_rows)
     selected_rows = filter_rows_by_dashboard_year(selected_rows)
     data = build_dashboard_data(current, selected_rows)
+    data["inventory"] = build_inventory_summary(inventory_path)
+    data["sourceFiles"] = {
+        "deals": deal_path.name,
+        "inventory": inventory_path.name if inventory_path else "",
+    }
+    data["sourceRows"] = {
+        "deals": len(source_rows),
+        "inventory": data["inventory"].get("totalRows", 0),
+    }
     write_dashboard_data(data)
     print(json.dumps(summarize(data, len(source_rows)), ensure_ascii=False, indent=2))
 

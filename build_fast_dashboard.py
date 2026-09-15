@@ -339,12 +339,58 @@ HTML_TEMPLATE = """<!doctype html>
     .panel-header span {
       color: var(--muted);
       font-size: 12px;
+      max-width: 52%;
+      overflow: hidden;
+      text-align: right;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
     .panel-body {
       padding: 12px 14px 14px;
     }
     .wide { grid-column: 1 / -1; }
+    .inventory-stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--line);
+    }
+    .inventory-stat {
+      min-width: 0;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .inventory-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+    .inventory-value {
+      margin-top: 5px;
+      color: var(--text);
+      font-size: 21px;
+      line-height: 1.1;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .inventory-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .subpanel-title {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
     .bar-list {
       display: grid;
       gap: 7px;
@@ -477,12 +523,14 @@ HTML_TEMPLATE = """<!doctype html>
         border-bottom: 1px solid var(--line);
       }
       .grid, .kpi-row { grid-template-columns: 1fr; }
+      .inventory-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       .main, .sidebar { padding: 12px; }
       .header, .table-tools { grid-template-columns: 1fr; display: grid; }
       .status { text-align: left; }
       .date-grid { grid-template-columns: 1fr; }
+      .inventory-stats { grid-template-columns: 1fr 1fr; }
       .bar-row { grid-template-columns: 1fr 92px 48px; }
       .month-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); height: auto; }
       .month-col { height: 120px; }
@@ -532,7 +580,7 @@ HTML_TEMPLATE = """<!doctype html>
       <header class="header">
         <div>
           <h1>Отчет по сделкам 2026</h1>
-          <div class="subtitle">Тюмень, данные из OLD_DATA. Все графики считают только количество сделок.</div>
+          <div class="subtitle">Тюмень, данные из OLD_DATA. Все графики по сделкам считают только количество сделок.</div>
         </div>
         <div class="status" id="status">Подготовка данных</div>
       </header>
@@ -569,6 +617,43 @@ HTML_TEMPLATE = """<!doctype html>
         <article class="panel wide">
           <div class="panel-header"><h3>Залогодержатели / банки</h3><span id="lenders-subtitle"></span></div>
           <div class="panel-body" id="chart-lenders"></div>
+        </article>
+        <article class="panel wide" id="inventory-panel">
+          <div class="panel-header"><h3>Остатки и проектный объем</h3><span id="inventory-subtitle"></span></div>
+          <div class="panel-body">
+            <div class="inventory-stats">
+              <div class="inventory-stat">
+                <div class="inventory-label">Корпусов</div>
+                <div class="inventory-value" id="inv-buildings">0</div>
+              </div>
+              <div class="inventory-stat">
+                <div class="inventory-label">Активных</div>
+                <div class="inventory-value" id="inv-active">0</div>
+              </div>
+              <div class="inventory-stat">
+                <div class="inventory-label">Лотов в проекте</div>
+                <div class="inventory-value" id="inv-project-lots">0</div>
+              </div>
+              <div class="inventory-stat">
+                <div class="inventory-label">Осталось лотов</div>
+                <div class="inventory-value" id="inv-remaining-lots">0</div>
+              </div>
+              <div class="inventory-stat">
+                <div class="inventory-label">Осталось площади</div>
+                <div class="inventory-value" id="inv-remaining-area">0</div>
+              </div>
+            </div>
+            <div class="inventory-grid">
+              <div>
+                <div class="subpanel-title">Застройщики по остатку лотов</div>
+                <div id="chart-inventory-developers"></div>
+              </div>
+              <div>
+                <div class="subpanel-title">Стадии строительной готовности</div>
+                <div id="chart-inventory-stages"></div>
+              </div>
+            </div>
+          </div>
         </article>
         <article class="panel wide">
           <div class="panel-header">
@@ -610,6 +695,7 @@ HTML_TEMPLATE = """<!doctype html>
   <script type="module">
     const tBoot = performance.now();
     const raw = JSON.parse(document.getElementById("dashboard-data").textContent);
+    const inventory = raw.inventory || {};
     const fields = raw.dealFields || [];
     const fieldIndex = Object.fromEntries(fields.map((field, index) => [field, index]));
     const stringTable = raw.stringTable || [];
@@ -907,6 +993,29 @@ HTML_TEMPLATE = """<!doctype html>
       $("#lenders-subtitle").textContent = "топ-16";
     }
 
+    function renderInventory() {
+      const panel = $("#inventory-panel");
+      if (!inventory || !Number(inventory.totalBuildings)) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      $("#inventory-subtitle").textContent = inventory.sourceFile || "";
+      $("#inv-buildings").textContent = formatInt.format(Number(inventory.totalBuildings) || 0);
+      $("#inv-active").textContent = formatInt.format(Number(inventory.activeBuildings) || 0);
+      $("#inv-project-lots").textContent = formatInt.format(Number(inventory.projectLots) || 0);
+      $("#inv-remaining-lots").textContent = formatInt.format(Number(inventory.remainingLots) || 0);
+      $("#inv-remaining-area").textContent = `${formatArea.format(Number(inventory.remainingArea) || 0)} м2`;
+
+      const developerItems = (inventory.byDeveloper || [])
+        .map((item) => ({ label: item.label, count: Number(item.remainingLots) || 0 }))
+        .filter((item) => item.count > 0);
+      const stageItems = (inventory.byStage || [])
+        .map((item) => ({ label: item.label, count: Number(item.count) || 0 }));
+      renderBarChart("chart-inventory-developers", developerItems, 16);
+      renderBarChart("chart-inventory-stages", stageItems, 10);
+    }
+
     function aggregate(rows, keyField, labelField) {
       const map = new Map();
       for (const row of rows) {
@@ -1080,13 +1189,19 @@ HTML_TEMPLATE = """<!doctype html>
     function boot() {
       renderFilterHost();
       initEvents();
+      renderInventory();
       const started = performance.now();
       state.filtered = records;
       state.sorted = sortedByDate(records);
       renderDashboard(started);
       const bootMs = performance.now() - tBoot;
       $("#status").innerHTML = `<strong>${formatInt.format(records.length)}</strong> сделок · старт за ${bootMs.toFixed(1)} мс`;
-      window.__DASHBOARD_BOOT__ = { bootMs, rows: records.length };
+      window.__DASHBOARD_BOOT__ = {
+        bootMs,
+        rows: records.length,
+        inventoryBuildings: Number(inventory.totalBuildings) || 0,
+        inventoryRemainingLots: Number(inventory.remainingLots) || 0
+      };
     }
 
     boot();
