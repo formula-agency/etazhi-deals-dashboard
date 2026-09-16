@@ -201,14 +201,14 @@ def latest_matching_file(patterns: tuple[str, ...], required: bool = True) -> Pa
             raise FileNotFoundError(f"Не найдена папка с данными: {DATA_DIR}")
         return None
 
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, int]] = []
     seen: set[Path] = set()
-    for pattern in patterns:
+    for pattern_index, pattern in enumerate(patterns):
         for path in DATA_DIR.glob(pattern):
             if path.name.startswith("~$") or path in seen or not path.is_file():
                 continue
             seen.add(path)
-            candidates.append(path)
+            candidates.append((path, pattern_index))
 
     if not candidates:
         if required:
@@ -217,7 +217,21 @@ def latest_matching_file(patterns: tuple[str, ...], required: bool = True) -> Pa
             )
         return None
 
-    return max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
+    def source_rank(candidate: tuple[Path, int]) -> tuple[dt.date, int, float, str]:
+        path, pattern_index = candidate
+        match = re.search(r"(?<!\d)(\d{2})_(\d{2})_(\d{4})(?!\d)", path.stem)
+        try:
+            snapshot_date = (
+                dt.date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+                if match
+                else dt.date.min
+            )
+        except ValueError:
+            snapshot_date = dt.date.min
+
+        return snapshot_date, -pattern_index, path.stat().st_mtime, path.name
+
+    return max(candidates, key=source_rank)[0]
 
 
 def source_files() -> dict[str, Path | None]:
