@@ -25,6 +25,7 @@ DEAL_FILE_PATTERNS = (
     "*Сделки*Экспозиция*.xlsx",
 )
 INVENTORY_FILE_PATTERNS = (
+    "*Остатки*Тюмень*.xlsx",
     "*Запроектированные*остатки*корпус*.xlsx",
     "*остатки*корпус*.xlsx",
 )
@@ -579,12 +580,19 @@ def build_inventory_summary(path: Path | None) -> dict[str, Any]:
         return {}
 
     rows = load_inventory_rows(path)
+    snapshot_dates = [date_iso(row.get("Дата среза")) for row in rows]
+    latest_snapshot = max((value for value in snapshot_dates if value), default="")
+    summary_rows = (
+        [row for row, value in zip(rows, snapshot_dates) if value == latest_snapshot]
+        if latest_snapshot
+        else rows
+    )
     by_developer: dict[str, dict[str, Any]] = {}
     by_object: dict[str, dict[str, Any]] = {}
     by_stage: dict[str, dict[str, Any]] = {}
     totals = inventory_bucket("Итого")
 
-    for row in rows:
+    for row in summary_rows:
         developer = clean_text(row.get("Девелопер")) or "Не указано"
         object_name = clean_text(row.get("ЖК")) or "Не указано"
         stage = clean_text(row.get("Текущая стадия строительной готовности")) or "Не указано"
@@ -593,10 +601,22 @@ def build_inventory_summary(path: Path | None) -> dict[str, Any]:
             "completed": bool_value(row.get("Корпус сдан на дату среза")),
             "project_lots": to_number(row.get("Общее количество лотов, шт.")),
             "project_area": to_number(row.get("Общая площадь, кв.м")),
-            "remaining_lots": to_number(row.get("Оставшееся кол-во лотов, шт.")),
-            "remaining_area": to_number(row.get("Общая оставшаяся площадь лотов, кв.м")),
+            "remaining_lots": to_number(
+                row.get("Оставшееся кол-во лотов, шт.")
+                if row.get("Оставшееся кол-во лотов, шт.") is not None
+                else row.get("Оставшееся кол-во лотов, шт. (дата договора)")
+            ),
+            "remaining_area": to_number(
+                row.get("Общая оставшаяся площадь лотов, кв.м")
+                if row.get("Общая оставшаяся площадь лотов, кв.м") is not None
+                else row.get("Общая оставшаяся площадь лотов, кв.м (дата договора)")
+            ),
             "remaining_lots_at_rve": to_number(
                 row.get("Оставшееся кол-во лотов на момент даты РВЭ, шт.")
+                if row.get("Оставшееся кол-во лотов на момент даты РВЭ, шт.") is not None
+                else row.get(
+                    "Оставшееся кол-во лотов на момент даты РВЭ, шт. (дата договора)"
+                )
             ),
         }
 
@@ -629,6 +649,8 @@ def build_inventory_summary(path: Path | None) -> dict[str, Any]:
     return {
         "sourceFile": path.name,
         "totalRows": len(rows),
+        "snapshotDate": latest_snapshot,
+        "snapshotRows": len(summary_rows),
         "totalBuildings": total["buildingCount"],
         "activeBuildings": total["activeBuildingCount"],
         "completedBuildings": total["completedBuildingCount"],
